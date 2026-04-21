@@ -20,6 +20,10 @@ schedule descriptions, next-run times, a 24-hour firing timeline, and a live pre
 
 ### Pre-built binaries
 
+```bash
+curl -sSL https://raw.githubusercontent.com/13/cronv/main/install.sh | sh
+```
+
 Download the latest release for your platform from the
 [Releases page](https://github.com/13/cronv/releases):
 
