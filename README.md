@@ -1,6 +1,6 @@
 # cronv
 
-A modern, keyboard-driven terminal UI for managing cron jobs — with human-readable
+A terminal UI for managing cron jobs — with human-readable
 schedule descriptions, next-run times, a 24-hour firing timeline, and a live preview editor.
 
 ```
