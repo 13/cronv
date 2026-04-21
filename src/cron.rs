@@ -609,8 +609,10 @@ pub fn serialize_crontab(lines: &[CrontabLine]) -> String {
 
 // ── @special catalogue ────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub struct SpecialEntry { pub keyword: &'static str, pub desc: &'static str }
 
+#[allow(dead_code)]
 pub const SPECIALS: &[SpecialEntry] = &[
     SpecialEntry { keyword: "@reboot",   desc: "At system startup"               },
     SpecialEntry { keyword: "@yearly",   desc: "Once a year — Jan 1 at midnight" },

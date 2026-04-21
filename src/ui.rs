@@ -6,39 +6,45 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, AppMode, EditForm, FormField, StatusKind, TextInput};
-use crate::cron::{SPECIALS, FIELD_HELP};
+use crate::app::{App, AppMode, EditForm, FormField, StatusKind, TextInput, VisibleRow};
+use crate::cron::FIELD_HELP;
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
-const C_ACCENT: Color = Color::Cyan;
-const C_GOLD:   Color = Color::Yellow;
-const C_GREEN:  Color = Color::Green;
-const C_MUTED:  Color = Color::DarkGray;
-const C_ERROR:  Color = Color::Red;
-const C_NEXT:   Color = Color::Rgb(100, 210, 180);
-const C_SEL_BG: Color = Color::Rgb(30, 50, 65);
-const C_DIM:    Color = Color::Rgb(60, 60, 80);
+const C_ACCENT:  Color = Color::Cyan;
+const C_GOLD:    Color = Color::Yellow;
+const C_GREEN:   Color = Color::Green;
+const C_MUTED:   Color = Color::DarkGray;
+const C_ERROR:   Color = Color::Red;
+const C_NEXT:    Color = Color::Rgb(100, 210, 180);
+const C_SEL_BG:  Color = Color::Rgb(30, 50, 65);
+const C_CMT:     Color = Color::Rgb(130, 130, 170);
+const C_DIM:     Color = Color::Rgb(55, 55, 75);
+const C_BAR_LOW: Color = Color::Rgb(30, 140, 130);
+const C_BAR_MED: Color = Color::Rgb(60, 185, 165);
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 pub fn render(f: &mut Frame, app: &App) {
-    let root   = f.area();
+    let root = f.area();
     let chunks = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(0),
-        Constraint::Length(4),
+        Constraint::Length(3),  // header
+        Constraint::Min(0),     // table
+        Constraint::Length(6),  // aggregate timeline — always visible
+        Constraint::Length(4),  // footer
     ]).split(root);
 
     render_header(f, chunks[0], app);
     render_table(f, app, chunks[1]);
-    render_footer(f, app, chunks[2]);
+    render_aggregate_timeline(f, app, chunks[2]);
+    render_footer(f, app, chunks[3]);
 
     match &app.mode {
         AppMode::EditEntry     => render_edit_modal(f, app, root),
+        AppMode::EditComment   => render_comment_modal(f, app, root),
         AppMode::Info          => render_info_panel(f, app, root),
-        AppMode::ConfirmDelete => render_confirm(f, "Delete Entry",
-            "Delete this entry?", "[y] Yes    [n] Cancel", C_ERROR, root),
+        AppMode::ConfirmDelete => render_confirm(f, "Delete Row",
+            "Delete this row?", "[y] Yes    [n] Cancel", C_ERROR, root),
         AppMode::ConfirmQuit   => render_confirm(f, "Unsaved Changes",
             "You have unsaved changes.",
             "[s] Save & quit    [y] Discard & quit    [n] Cancel", C_GOLD, root),
@@ -50,15 +56,16 @@ pub fn render(f: &mut Frame, app: &App) {
 // ── Header ────────────────────────────────────────────────────────────────────
 
 fn render_header(f: &mut Frame, area: Rect, app: &App) {
-    let dirty    = if app.dirty { Span::styled("  ✦ unsaved", Style::default().fg(C_GOLD)) } else { Span::raw("") };
-    let clock_lbl = if app.use_24h { "24h" } else { "12h" };
+    let dirty = if app.dirty { Span::styled("  ✦ unsaved", Style::default().fg(C_GOLD)) } else { Span::raw("") };
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("  cronv", Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("  ·  {} job{}  ·  ", app.entry_count(),
-                if app.entry_count() == 1 { "" } else { "s" }), Style::default().fg(C_MUTED)),
+            Span::styled(format!("  ·  {} job{}  ·  ",
+                app.entry_count(), if app.entry_count() == 1 { "" } else { "s" }),
+                Style::default().fg(C_MUTED)),
             Span::styled(app.source_label(), Style::default().fg(Color::Gray)),
-            Span::styled(format!("  [{}]", clock_lbl), Style::default().fg(C_MUTED)),
+            Span::styled(format!("  [{}]", if app.use_24h { "24h" } else { "12h" }),
+                Style::default().fg(C_MUTED)),
             dirty,
         ])).block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(C_ACCENT))),
         area,
@@ -68,18 +75,17 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
 // ── Main table ────────────────────────────────────────────────────────────────
 
 fn render_table(f: &mut Frame, app: &App, area: Rect) {
-    let entries = app.entries();
-    let u24 = app.use_24h;
+    let visible = app.visible_rows();
+    let u24     = app.use_24h;
 
-    if entries.is_empty() {
+    if visible.is_empty() {
         f.render_widget(
             Paragraph::new(vec![
                 Line::from(""),
                 Line::from(Span::styled("No cron jobs yet.", Style::default().fg(C_MUTED))),
                 Line::from(""),
                 Line::from(Span::styled("Press  n  to add your first job.", Style::default().fg(Color::Gray))),
-            ])
-            .alignment(Alignment::Center)
+            ]).alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(C_MUTED))),
             area,
         );
@@ -91,31 +97,50 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
         Cell::from("Schedule").style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
         Cell::from("Description").style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
         Cell::from("Next Run").style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
-        Cell::from("Command").style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
+        Cell::from("Command / Comment").style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
     ]).bottom_margin(1);
 
     let sel  = app.selected;
-    let rows: Vec<Row> = entries.iter().enumerate().map(|(idx, (_, e))| {
+    let rows: Vec<Row> = visible.iter().enumerate().map(|(idx, row)| {
         let is_sel = idx == sel;
-        let bg  = if is_sel { C_SEL_BG } else { Color::Reset };
-        let off = !e.enabled;
-        let dot = if e.enabled { Span::styled("●", Style::default().fg(C_GREEN).bg(bg)) }
-                  else         { Span::styled("○", Style::default().fg(C_MUTED).bg(bg)) };
-        let next_str = if e.enabled { e.schedule.next_run(u24).unwrap_or_else(|| "—".into()) }
-                       else { "disabled".into() };
-        let (sf, df, nf, tf) = if off { (C_MUTED,C_MUTED,C_MUTED,C_MUTED) }
-                                else  { (C_ACCENT,C_GOLD,C_NEXT,Color::White) };
-        Row::new(vec![
-            Cell::from(Line::from(dot)),
-            Cell::from(e.schedule.display()).style(Style::default().fg(sf).bg(bg)),
-            Cell::from(e.schedule.describe(u24)).style(Style::default().fg(df).bg(bg)),
-            Cell::from(next_str).style(Style::default().fg(nf).bg(bg)),
-            Cell::from(e.command.as_str()).style(Style::default().fg(tf).bg(bg)),
-        ])
+        let bg = if is_sel { C_SEL_BG } else { Color::Reset };
+
+        match row {
+            VisibleRow::Comment(li) => {
+                let text = if let crate::cron::CrontabLine::Comment(s) = &app.lines[*li] {
+                    s.trim_start_matches('#').trim().to_string()
+                } else { String::new() };
+                Row::new(vec![
+                    Cell::from(Span::styled("#", Style::default().fg(C_MUTED).bg(bg))),
+                    Cell::from("").style(Style::default().bg(bg)),
+                    Cell::from("").style(Style::default().bg(bg)),
+                    Cell::from("").style(Style::default().bg(bg)),
+                    Cell::from(text).style(Style::default().fg(C_CMT).bg(bg)
+                        .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() })),
+                ])
+            }
+            VisibleRow::Entry(li) => {
+                let e = if let crate::cron::CrontabLine::Entry(e) = &app.lines[*li] { e } else { return Row::new(vec![Cell::from("")]); };
+                let off = !e.enabled;
+                let dot = if e.enabled { Span::styled("●", Style::default().fg(C_GREEN).bg(bg)) }
+                          else         { Span::styled("○", Style::default().fg(C_MUTED).bg(bg)) };
+                let next_s = if e.enabled { e.schedule.next_run(u24).unwrap_or_else(|| "—".into()) }
+                             else { "disabled".into() };
+                let (sf, df, nf, tf) = if off { (C_MUTED,C_MUTED,C_MUTED,C_MUTED) }
+                                       else    { (C_ACCENT,C_GOLD,C_NEXT,Color::White) };
+                Row::new(vec![
+                    Cell::from(Line::from(dot)),
+                    Cell::from(e.schedule.display()).style(Style::default().fg(sf).bg(bg)),
+                    Cell::from(e.schedule.describe(u24)).style(Style::default().fg(df).bg(bg)),
+                    Cell::from(next_s).style(Style::default().fg(nf).bg(bg)),
+                    Cell::from(e.command.as_str()).style(Style::default().fg(tf).bg(bg)),
+                ])
+            }
+        }
     }).collect();
 
     let widths = [
-        Constraint::Length(3), Constraint::Length(18), Constraint::Length(34),
+        Constraint::Length(3), Constraint::Length(18), Constraint::Length(32),
         Constraint::Length(22), Constraint::Min(10),
     ];
     let mut state = TableState::default();
@@ -130,20 +155,88 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+// ── Aggregate timeline (all enabled jobs) ─────────────────────────────────────
+
+fn render_aggregate_timeline(f: &mut Frame, app: &App, area: Rect) {
+    let schedules = app.all_schedules();
+
+    // Sum firings per hour across all enabled entries
+    let mut totals = [0u32; 24];
+    for s in &schedules {
+        let fph = s.firings_per_hour();
+        for h in 0..24 { totals[h] += fph[h] as u32; }
+    }
+
+    let max = totals.iter().copied().max().unwrap_or(1).max(1);
+
+    // Header: hour labels
+    let hdr: Vec<Span> = (0..24u8).map(|h| {
+        Span::styled(format!("{:>2} ", h), Style::default().fg(C_MUTED))
+    }).collect();
+
+    // Bar row: proportional height block character
+    let bars: Vec<Span> = totals.iter().enumerate().map(|(h, &n)| {
+        let (ch, color) = if n == 0 {
+            ("░░ ", C_DIM)
+        } else {
+            let frac = n as f32 / max as f32;
+            match (frac * 4.0) as u8 {
+                0     => ("▂▂ ", C_BAR_LOW),
+                1     => ("▄▄ ", C_BAR_LOW),
+                2     => ("▆▆ ", C_BAR_MED),
+                _     => ("██ ", C_NEXT),
+            }
+        };
+        let _ = h;
+        Span::styled(ch, Style::default().fg(color))
+    }).collect();
+
+    // AM/PM markers
+    let markers: Vec<Span> = (0..24u8).map(|h| {
+        let lbl = match h { 0 => "AM", 12 => "PM", _ => "  " };
+        Span::styled(format!("{:<3}", lbl), Style::default().fg(C_MUTED))
+    }).collect();
+
+    // Legend
+    let total_jobs = schedules.len();
+    let legend = Line::from(vec![
+        Span::styled("░ ", Style::default().fg(C_DIM)), Span::raw("idle  "),
+        Span::styled("▂ ", Style::default().fg(C_BAR_LOW)),    Span::raw("low  "),
+        Span::styled("▆ ", Style::default().fg(C_BAR_MED)),    Span::raw("med  "),
+        Span::styled("█ ", Style::default().fg(C_NEXT)),        Span::raw("high  "),
+        Span::styled(format!("   {} active job{}", total_jobs, if total_jobs == 1 { "" } else { "s" }),
+            Style::default().fg(C_MUTED)),
+    ]);
+
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(hdr),
+            Line::from(bars),
+            Line::from(markers),
+            Line::from(""),
+            legend,
+        ])
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::ALL)
+            .border_style(Style::default().fg(C_MUTED))
+            .title(" All Jobs — 24h Firing Pattern ")
+            .title_style(Style::default().fg(C_MUTED))),
+        area,
+    );
+}
+
 // ── Footer ────────────────────────────────────────────────────────────────────
 
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     let status = if let Some((msg, kind)) = &app.status {
-        let color = match kind {
-            StatusKind::Success => C_GREEN, StatusKind::Error => C_ERROR, StatusKind::Info => C_ACCENT,
-        };
-        Line::from(Span::styled(msg.as_str(), Style::default().fg(color)))
+        let c = match kind { StatusKind::Success => C_GREEN, StatusKind::Error => C_ERROR, StatusKind::Info => C_ACCENT };
+        Line::from(Span::styled(msg.as_str(), Style::default().fg(c)))
     } else { Line::from("") };
     f.render_widget(
         Paragraph::new(vec![
             status,
             Line::from(Span::styled(
-                " n  New    e  Edit    i  Info    d  Delete    t  Toggle    s  Save    c  Clock    ?  Help    q  Quit",
+                " n  New    e  Edit    i  Info    d  Delete    t  Toggle    Shift+↑↓  Move    s  Save    c  Clock    ?  Help    q  Quit",
                 Style::default().fg(C_MUTED),
             )),
         ])
@@ -153,164 +246,67 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-// ── Info panel ────────────────────────────────────────────────────────────────
+// ── Comment edit modal ────────────────────────────────────────────────────────
 
-fn render_info_panel(f: &mut Frame, app: &App, area: Rect) {
-    let Some((_, entry)) = app.entries().into_iter().nth(app.selected) else { return };
+fn render_comment_modal(f: &mut Frame, app: &App, area: Rect) {
+    let Some((input, _)) = &app.comment_input else { return };
 
-    let w = 78_u16.min(area.width.saturating_sub(4));
-    let h = 36_u16.min(area.height.saturating_sub(2));
-    let popup = centered_rect(w, h, area);
-    f.render_widget(Clear, popup);
+    let w = 64_u16.min(area.width.saturating_sub(4));
+    let modal = centered_rect(w, 8, area);
+    f.render_widget(Clear, modal);
 
-    let inner = inner_rect(popup);
-    let u24   = app.use_24h;
-
-    // Layout: schedule/desc | next runs | timeline
+    let inner = inner_rect(modal);
     let rows = Layout::vertical([
-        Constraint::Length(3),  // schedule + description
-        Constraint::Length(1),  // spacer
-        Constraint::Length(14), // next runs (up to 10)
-        Constraint::Length(1),  // spacer
-        Constraint::Length(5),  // timeline
-        Constraint::Min(0),
-        Constraint::Length(1),  // hint
+        Constraint::Length(3), // text field
+        Constraint::Length(1), // spacer
+        Constraint::Length(1), // hint
     ]).split(inner);
 
-    // ── Schedule & description ────────────────────────────────────────────────
-    let sched_str = entry.schedule.display();
-    let desc_str  = entry.schedule.describe(u24);
+    // Text field
     f.render_widget(
-        Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled("Schedule:  ", Style::default().fg(C_MUTED)),
-                Span::styled(&sched_str, Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
-            ]),
-            Line::from(vec![
-                Span::styled("Frequency: ", Style::default().fg(C_MUTED)),
-                Span::styled(&desc_str, Style::default().fg(C_GOLD)),
-            ]),
-            Line::from(vec![
-                Span::styled("Command:   ", Style::default().fg(C_MUTED)),
-                Span::styled(entry.command.as_str(), Style::default().fg(Color::White)),
-            ]),
-        ])
-        .block(Block::default().borders(Borders::ALL)
-            .border_style(Style::default().fg(C_MUTED))),
+        Paragraph::new(Line::from(Span::styled(&input.value, Style::default().fg(Color::White))))
+            .block(Block::default().borders(Borders::ALL)
+                .border_style(Style::default().fg(C_ACCENT))
+                .title(" Comment text (without #) ")
+                .title_style(Style::default().fg(C_MUTED))),
         rows[0],
     );
 
-    // ── Next runs ─────────────────────────────────────────────────────────────
-    let runs = entry.schedule.next_n_runs(10, u24);
-    let run_lines: Vec<Line> = if runs.is_empty() {
-        vec![Line::from(Span::styled("  No future runs (e.g. @reboot)", Style::default().fg(C_MUTED)))]
-    } else {
-        runs.iter().enumerate().map(|(i, (_, s))| {
-            Line::from(vec![
-                Span::styled(format!("  {:>2}.  ", i + 1), Style::default().fg(C_MUTED)),
-                Span::styled(s.as_str(), Style::default().fg(C_NEXT)),
-            ])
-        }).collect()
-    };
+    // Cursor
+    let cx = rows[0].x + 1 + input.cursor as u16;
+    let cy = rows[0].y + 1;
+    if cx < rows[0].x + rows[0].width.saturating_sub(1) {
+        f.set_cursor_position((cx, cy));
+    }
 
+    // Hint
     f.render_widget(
-        Paragraph::new(run_lines)
-            .block(Block::default().borders(Borders::ALL)
-                .border_style(Style::default().fg(C_MUTED))
-                .title(" Next 10 Runs ")
-                .title_style(Style::default().fg(C_MUTED))),
+        Paragraph::new(Line::from(Span::styled(
+            " Enter / Ctrl+S  Save    Esc  Cancel    (empty = delete line)",
+            Style::default().fg(C_MUTED),
+        ))).alignment(Alignment::Center),
         rows[2],
     );
 
-    // ── 24-hour timeline ──────────────────────────────────────────────────────
-    render_timeline(f, entry.schedule.firings_per_hour(), rows[4]);
-
-    // ── Hint ──────────────────────────────────────────────────────────────────
-    f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "  Any key to close", Style::default().fg(C_MUTED),
-        ))).alignment(Alignment::Center),
-        rows[6],
-    );
-
-    // Border
+    // Outer border
     f.render_widget(
         Block::default().borders(Borders::ALL)
-            .border_style(Style::default().fg(C_ACCENT))
-            .title(" Job Info ")
+            .border_style(Style::default().fg(C_CMT))
+            .title(" Edit Comment  (#  from entry editor)")
             .title_alignment(Alignment::Center)
-            .title_style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
-        popup,
+            .title_style(Style::default().fg(C_CMT).add_modifier(Modifier::BOLD)),
+        modal,
     );
 }
 
-fn render_timeline(f: &mut Frame, counts: [u8; 24], area: Rect) {
-    // Header row: hour numbers
-    let header: Vec<Span> = (0..24u8).map(|h| {
-        Span::styled(format!("{:>2} ", h), Style::default().fg(C_MUTED))
-    }).collect();
-
-    // Bar row: colored blocks by density
-    let bars: Vec<Span> = counts.iter().map(|&n| {
-        let (ch, color) = match n {
-            0       => ("░░ ", C_DIM),
-            1       => ("▒▒ ", Color::Rgb(30, 140, 130)),
-            2..=5   => ("▓▓ ", Color::Rgb(60, 185, 165)),
-            6..=11  => ("██ ", C_NEXT),
-            _       => ("██ ", Color::White),
-        };
-        Span::styled(ch, Style::default().fg(color))
-    }).collect();
-
-    // AM/PM marker row
-    let markers: Vec<Span> = (0..24u8).map(|h| {
-        let label = match h { 0 => "AM", 12 => "PM", _ => "  " };
-        Span::styled(format!("{:<3}", label), Style::default().fg(C_MUTED))
-    }).collect();
-
-    let legend = Line::from(vec![
-        Span::styled("  ░░ ", Style::default().fg(C_DIM)),
-        Span::raw("none  "),
-        Span::styled("▒▒ ", Style::default().fg(Color::Rgb(30,140,130))),
-        Span::raw("1  "),
-        Span::styled("▓▓ ", Style::default().fg(Color::Rgb(60,185,165))),
-        Span::raw("2–5  "),
-        Span::styled("██ ", Style::default().fg(C_NEXT)),
-        Span::raw("6–11  "),
-        Span::styled("██ ", Style::default().fg(Color::White)),
-        Span::raw("12+  firings/hour"),
-    ]);
-
-    f.render_widget(
-        Paragraph::new(vec![
-            Line::from(header),
-            Line::from(bars),
-            Line::from(markers),
-            Line::from(""),
-            legend,
-        ])
-        .block(Block::default().borders(Borders::ALL)
-            .border_style(Style::default().fg(C_MUTED))
-            .title(" 24-Hour Firing Pattern ")
-            .title_style(Style::default().fg(C_MUTED))),
-        area,
-    );
-}
-
-// ── Edit modal ────────────────────────────────────────────────────────────────
+// ── Edit modal (cron entry) ───────────────────────────────────────────────────
 
 pub fn render_edit_modal(f: &mut Frame, app: &App, area: Rect) {
     let Some(form) = &app.form else { return };
-
-    let typed    = form.special.value.trim().to_lowercase();
-    let is_known = SPECIALS.iter().any(|s| s.keyword == typed);
-    let show_kw  = form.is_special && form.focused == FormField::Special && !is_known;
-
-    let w = if show_kw { 88_u16 } else { 72_u16 }.min(area.width.saturating_sub(4));
+    let w = 72_u16.min(area.width.saturating_sub(4));
     let h = 24_u16.min(area.height.saturating_sub(4));
     let modal = centered_rect(w, h, area);
     f.render_widget(Clear, modal);
-
     let title = if form.editing_index.is_some() { " Edit Cron Job " } else { " New Cron Job " };
     f.render_widget(
         Block::default().borders(Borders::ALL)
@@ -318,22 +314,14 @@ pub fn render_edit_modal(f: &mut Frame, app: &App, area: Rect) {
             .title(title).title_alignment(Alignment::Center),
         modal,
     );
-
-    let inner = inner_rect(modal);
-    if show_kw {
-        let cols = Layout::horizontal([Constraint::Min(0), Constraint::Length(34)]).split(inner);
-        render_form_body(f, form, app.use_24h, cols[0]);
-        render_special_panel(f, form, cols[1]);
-    } else {
-        render_form_body(f, form, app.use_24h, inner);
-    }
+    render_form_body(f, form, app.use_24h, inner_rect(modal));
 }
 
 fn render_form_body(f: &mut Frame, form: &EditForm, use_24h: bool, area: Rect) {
     let rows = Layout::vertical([
         Constraint::Length(1), // type toggle
         Constraint::Length(1), // spacer
-        Constraint::Length(3), // schedule
+        Constraint::Length(3), // schedule fields
         Constraint::Length(2), // field help
         Constraint::Length(3), // preview
         Constraint::Length(1), // spacer
@@ -347,10 +335,9 @@ fn render_form_body(f: &mut Frame, form: &EditForm, use_24h: bool, area: Rect) {
     let sched_area = rows[2];
     if form.is_special {
         render_field(f, "Special (@keyword)", &form.special, form.focused == FormField::Special, sched_area);
-        // For special mode, show plain hint
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                "  @reboot @daily @weekly @monthly @yearly @hourly @annually @midnight",
+                "  @reboot @hourly @daily @weekly @monthly @yearly @annually @midnight",
                 Style::default().fg(C_MUTED),
             ))),
             rows[3],
@@ -365,19 +352,16 @@ fn render_form_body(f: &mut Frame, form: &EditForm, use_24h: bool, area: Rect) {
         render_field(f, "Day",     &form.day,     form.focused == FormField::Day,     fcols[2]);
         render_field(f, "Month",   &form.month,   form.focused == FormField::Month,   fcols[3]);
         render_field(f, "Weekday", &form.weekday, form.focused == FormField::Weekday, fcols[4]);
-
-        // Field-specific help
         render_field_help(f, form, rows[3]);
     }
 
     let preview = form.preview(use_24h);
-    let pcolor  = if preview.contains("Invalid") { C_ERROR } else { C_GOLD };
+    let pcol    = if preview.contains("Invalid") { C_ERROR } else { C_GOLD };
     f.render_widget(
-        Paragraph::new(Line::from(Span::styled(&preview, Style::default().fg(pcolor))))
+        Paragraph::new(Line::from(Span::styled(&preview, Style::default().fg(pcol))))
             .block(Block::default().borders(Borders::ALL)
                 .border_style(Style::default().fg(C_MUTED))
-                .title(" Preview ")
-                .title_style(Style::default().fg(C_MUTED))),
+                .title(" Preview ").title_style(Style::default().fg(C_MUTED))),
         rows[4],
     );
 
@@ -385,18 +369,16 @@ fn render_form_body(f: &mut Frame, form: &EditForm, use_24h: bool, area: Rect) {
 
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            " Tab/↑↓  Navigate    Ctrl+S  Save    F1  Toggle type    Esc  Cancel",
+            " Tab/Shift+Tab  Fields    F1  Toggle type    Ctrl+S  Save    Esc  Cancel",
             Style::default().fg(C_MUTED),
         ))).alignment(Alignment::Center),
         rows[8],
     );
-
     set_cursor(f, form, area, sched_area);
 }
 
-/// Show allowed value ranges + examples for the currently focused field.
 fn render_field_help(f: &mut Frame, form: &EditForm, area: Rect) {
-    let (field_name, range, examples) = match form.focused {
+    let (fname, range, examples) = match form.focused {
         FormField::Minute  => FIELD_HELP[0],
         FormField::Hour    => FIELD_HELP[1],
         FormField::Day     => FIELD_HELP[2],
@@ -405,48 +387,15 @@ fn render_field_help(f: &mut Frame, form: &EditForm, area: Rect) {
         _                  => return,
     };
     f.render_widget(
-        Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled(format!("  {} ", field_name), Style::default().fg(C_ACCENT)),
-                Span::styled(format!("[{}]", range), Style::default().fg(C_GOLD)),
-                Span::styled("  e.g. ", Style::default().fg(C_MUTED)),
-                Span::styled(examples, Style::default().fg(Color::Gray)),
-            ]),
-        ]),
+        Paragraph::new(Line::from(vec![
+            Span::styled(format!("  {} ", fname), Style::default().fg(C_ACCENT)),
+            Span::styled(format!("[{}]", range),  Style::default().fg(C_GOLD)),
+            Span::styled("  e.g. ", Style::default().fg(C_MUTED)),
+            Span::styled(examples, Style::default().fg(Color::Gray)),
+        ])),
         area,
     );
 }
-
-// ── @Special reference panel ──────────────────────────────────────────────────
-
-fn render_special_panel(f: &mut Frame, form: &EditForm, area: Rect) {
-    let current = form.special.value.trim().to_lowercase();
-    let mut lines: Vec<Line> = vec![Line::from("")];
-    for s in SPECIALS {
-        let matched = current == s.keyword;
-        let kw_style = if matched {
-            Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(C_GOLD)
-        };
-        lines.push(Line::from(vec![
-            Span::styled(if matched { "▶ " } else { "  " }, Style::default().fg(C_ACCENT)),
-            Span::styled(s.keyword, kw_style),
-        ]));
-        lines.push(Line::from(vec![Span::raw("    "), Span::styled(s.desc, Style::default().fg(Color::Gray))]));
-        lines.push(Line::from(""));
-    }
-    f.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL)
-                .border_style(Style::default().fg(C_MUTED))
-                .title(" @keywords ")
-                .title_style(Style::default().fg(C_MUTED))),
-        area,
-    );
-}
-
-// ── Field helpers ─────────────────────────────────────────────────────────────
 
 fn render_type_toggle(f: &mut Frame, form: &EditForm, area: Rect) {
     let (sp, st) = if form.is_special {
@@ -487,24 +436,133 @@ fn set_cursor(f: &mut Frame, form: &EditForm, area: Rect, sched_area: Rect) {
         FormField::Command => rows[6],
         FormField::Special => sched_area,
         _ => {
-            let fcols = Layout::horizontal([
+            let fc = Layout::horizontal([
                 Constraint::Ratio(1,5), Constraint::Ratio(1,5), Constraint::Ratio(1,5),
                 Constraint::Ratio(1,5), Constraint::Ratio(1,5),
             ]).split(sched_area);
             match form.focused {
-                FormField::Minute  => fcols[0], FormField::Hour    => fcols[1],
-                FormField::Day     => fcols[2], FormField::Month   => fcols[3],
-                FormField::Weekday => fcols[4], _ => return,
+                FormField::Minute  => fc[0], FormField::Hour    => fc[1],
+                FormField::Day     => fc[2], FormField::Month   => fc[3],
+                FormField::Weekday => fc[4], _ => return,
             }
         }
     };
-
     let input = form.active_input();
     let cx = field_area.x + 1 + input.cursor as u16;
     let cy = field_area.y + 1;
     if cx < field_area.x + field_area.width.saturating_sub(1) {
         f.set_cursor_position((cx, cy));
     }
+}
+
+// ── Info panel (per-job) ──────────────────────────────────────────────────────
+
+fn render_info_panel(f: &mut Frame, app: &App, area: Rect) {
+    // Find the selected entry (skip if cursor is on a comment)
+    let entry = app.visible_rows().into_iter().nth(app.selected).and_then(|r| {
+        if let VisibleRow::Entry(li) = r {
+            if let crate::cron::CrontabLine::Entry(e) = &app.lines[li] { Some(e.clone()) } else { None }
+        } else { None }
+    });
+    let Some(entry) = entry else { return };
+
+    let w = 72_u16.min(area.width.saturating_sub(4));
+    let h = 30_u16.min(area.height.saturating_sub(2));
+    let popup = centered_rect(w, h, area);
+    f.render_widget(Clear, popup);
+
+    let inner = inner_rect(popup);
+    let u24   = app.use_24h;
+
+    let rows = Layout::vertical([
+        Constraint::Length(3),  // schedule + command
+        Constraint::Length(1),  // spacer
+        Constraint::Length(14), // next 10 runs
+        Constraint::Length(1),  // spacer
+        Constraint::Length(5),  // per-job timeline
+        Constraint::Min(0),
+        Constraint::Length(1),  // hint
+    ]).split(inner);
+
+    // Schedule / description / command
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled("Schedule:  ", Style::default().fg(C_MUTED)),
+                Span::styled(entry.schedule.display(),
+                    Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled("   ", Style::default()),
+                Span::styled(entry.schedule.describe(u24), Style::default().fg(C_GOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled("Command:   ", Style::default().fg(C_MUTED)),
+                Span::styled(entry.command.as_str(), Style::default().fg(Color::White)),
+            ]),
+        ])
+        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(C_MUTED))),
+        rows[0],
+    );
+
+    // Next 10 runs
+    let runs = entry.schedule.next_n_runs(10, u24);
+    let run_lines: Vec<Line> = if runs.is_empty() {
+        vec![Line::from(Span::styled("  No future runs calculable (e.g. @reboot)", Style::default().fg(C_MUTED)))]
+    } else {
+        runs.iter().enumerate().map(|(i, (_, s))| Line::from(vec![
+            Span::styled(format!("  {:>2}.  ", i+1), Style::default().fg(C_MUTED)),
+            Span::styled(s.as_str(), Style::default().fg(C_NEXT)),
+        ])).collect()
+    };
+    f.render_widget(
+        Paragraph::new(run_lines)
+            .block(Block::default().borders(Borders::ALL)
+                .border_style(Style::default().fg(C_MUTED))
+                .title(" Next 10 Runs ")
+                .title_style(Style::default().fg(C_MUTED))),
+        rows[2],
+    );
+
+    // Per-job timeline
+    render_single_timeline(f, entry.schedule.firings_per_hour(), rows[4]);
+
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "  Any key to close", Style::default().fg(C_MUTED),
+        ))).alignment(Alignment::Center),
+        rows[6],
+    );
+
+    f.render_widget(
+        Block::default().borders(Borders::ALL)
+            .border_style(Style::default().fg(C_ACCENT))
+            .title(" Job Info ").title_alignment(Alignment::Center)
+            .title_style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
+        popup,
+    );
+}
+
+fn render_single_timeline(f: &mut Frame, counts: [u8; 24], area: Rect) {
+    let hdr: Vec<Span> = (0..24u8).map(|h| Span::styled(format!("{:>2} ", h), Style::default().fg(C_MUTED))).collect();
+    let bars: Vec<Span> = counts.iter().map(|&n| {
+        let (ch, col) = match n {
+            0     => ("░░ ", C_DIM),
+            1     => ("▒▒ ", C_BAR_LOW),
+            2..=5 => ("▓▓ ", C_BAR_MED),
+            _     => ("██ ", C_NEXT),
+        };
+        Span::styled(ch, Style::default().fg(col))
+    }).collect();
+    let markers: Vec<Span> = (0..24u8).map(|h| {
+        Span::styled(format!("{:<3}", match h { 0 => "AM", 12 => "PM", _ => "  " }), Style::default().fg(C_MUTED))
+    }).collect();
+    f.render_widget(
+        Paragraph::new(vec![Line::from(hdr), Line::from(bars), Line::from(markers)])
+            .block(Block::default().borders(Borders::ALL)
+                .border_style(Style::default().fg(C_MUTED))
+                .title(" Firing Pattern ")
+                .title_style(Style::default().fg(C_MUTED))),
+        area,
+    );
 }
 
 // ── Confirm dialog ────────────────────────────────────────────────────────────
@@ -543,36 +601,37 @@ fn render_help(f: &mut Frame, area: Rect) {
     }
     fn kv(k: &'static str, d: &'static str) -> Line<'static> {
         Line::from(vec![
-            Span::styled(format!("  {:16}", k), Style::default().fg(C_GOLD)),
+            Span::styled(format!("  {:18}", k), Style::default().fg(C_GOLD)),
             Span::raw(d),
         ])
     }
 
     let lines: Vec<Line> = vec![
         Line::from(""),
-        sec("Navigation"),    Line::from(""),
-        kv("↑ / k",          "Move up"),
-        kv("↓ / j",          "Move down"),
+        sec("Navigation"),     Line::from(""),
+        kv("↑ / k",           "Move cursor up"),
+        kv("↓ / j",           "Move cursor down"),
+        kv("Shift+↑",          "Move row up"),
+        kv("Shift+↓",          "Move row down"),
         Line::from(""),
-        sec("List actions"),  Line::from(""),
-        kv("n / a",          "Add new cron job"),
-        kv("e / Enter",      "Edit selected entry"),
-        kv("i",              "Show job info, next runs & timeline"),
-        kv("d",              "Delete selected entry"),
-        kv("t",              "Toggle enable / disable"),
-        kv("s",              "Save crontab"),
-        kv("c",              "Toggle 12h / 24h clock"),
-        kv("q / Esc",        "Quit  (prompts if unsaved)"),
+        sec("List actions"),   Line::from(""),
+        kv("n / a",           "Add new cron job"),
+        kv("e / Enter",       "Edit entry  or  edit comment text"),
+        kv("i",               "Job info: next 10 runs + timeline"),
+        kv("d",               "Delete selected row"),
+        kv("t",               "Toggle enable / disable"),
+        kv("s",               "Save crontab"),
+        kv("c",               "Toggle 12h / 24h clock"),
+        kv("q / Esc",         "Quit  (prompts if unsaved)"),
         Line::from(""),
-        sec("Inside editor"), Line::from(""),
-        kv("Tab",            "Next field"),
-        kv("Shift+Tab",      "Previous field"),
-        kv("F1",             "Toggle @Special / 5-field"),
-        kv("Ctrl+S",         "Save entry"),
-        kv("Enter",          "Advance / save on Command"),
-        kv("Esc",            "Cancel edit"),
+        sec("Inside editor"),  Line::from(""),
+        kv("Tab / Shift+Tab", "Next / previous field"),
+        kv("F1",              "Toggle @Special / 5-field"),
+        kv("Ctrl+S",          "Save entry"),
+        kv("Enter",           "Advance / save on Command"),
+        kv("Esc",             "Cancel"),
         Line::from(""),
-        Line::from(Span::styled("  Any key to close this panel.", Style::default().fg(C_MUTED))),
+        Line::from(Span::styled("  Any key to close.", Style::default().fg(C_MUTED))),
     ];
 
     f.render_widget(
