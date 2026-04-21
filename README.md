@@ -16,45 +16,23 @@ schedule descriptions, next-run times, a 24-hour firing timeline, and a live pre
  ○ │ */5 * * * *     │ Every 5 minutes                      │ disabled              │ curl -s https://…
 ```
 
-## Features
-
-- **Smart descriptions** — `*/5 9,12 1 2-4 *` → _Every 5 minutes from 09:00 to 09:55 and 12:00 to 12:55, on the 1st in February through April_
-- **Next-run column** — live calculation of the next fire time with relative label (`in 13m`, `in 4 days`)
-- **Job info panel** — press `i` to see the next 10 runs and a 24-hour firing-pattern chart
-- **Live preview editor** — field-level validation with per-field allowed-value hints
-- **@special keywords** — `@reboot`, `@daily`, `@hourly`, etc. with autocomplete panel
-- **12h/24h toggle** — switch clock format with `c`
-- **File mode** — edit any crontab file directly with `--file`
-- **Strict validation** — invalid field values are never shown as entries
-
 ## Installation
 
 ### Pre-built binaries
 
 Download the latest release for your platform from the
-[Releases page](https://github.com/you/cronv/releases):
+[Releases page](https://github.com/13/cronv/releases):
 
 | Platform | Binary |
 |---|---|
 | Linux x86-64 (glibc) | `cronv-linux-x86_64.tar.gz` |
 | Linux x86-64 (musl / Alpine) | `cronv-linux-x86_64-musl.tar.gz` |
-| macOS Intel | `cronv-macos-x86_64.tar.gz` |
-| macOS Apple Silicon | `cronv-macos-aarch64.tar.gz` |
 
 ```bash
 # Example: Linux
-curl -LO https://github.com/you/cronv/releases/latest/download/cronv-linux-x86_64-musl.tar.gz
+curl -LO https://github.com/13/cronv/releases/latest/download/cronv-linux-x86_64-musl.tar.gz
 tar xzf cronv-linux-x86_64-musl.tar.gz
 sudo mv cronv /usr/local/bin/
-```
-
-### Alpine Linux / Docker
-
-The musl binary is fully static — no dependencies required:
-
-```dockerfile
-FROM alpine:latest
-COPY cronv /usr/local/bin/cronv
 ```
 
 ### Build from source
@@ -62,7 +40,7 @@ COPY cronv /usr/local/bin/cronv
 Requires Rust 1.75+ (stable).
 
 ```bash
-git clone https://github.com/you/cronv
+git clone https://github.com/13/cronv
 cd cronv
 cargo build --release
 # Binary: target/release/cronv
