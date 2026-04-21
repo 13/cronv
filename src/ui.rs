@@ -20,6 +20,7 @@ const C_NEXT:    Color = Color::Rgb(100, 210, 180);
 const C_SEL_BG:  Color = Color::Rgb(30, 50, 65);
 const C_CMT:     Color = Color::Rgb(130, 130, 170);
 const C_DIM:     Color = Color::Rgb(55, 55, 75);
+const C_HOV:     Color = Color::Rgb(255, 200, 80);  // hovered-job highlight on timeline
 const C_BAR_LOW: Color = Color::Rgb(30, 140, 130);
 const C_BAR_MED: Color = Color::Rgb(60, 185, 165);
 
@@ -150,7 +151,7 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
             .header(header)
             .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(C_MUTED)))
             .highlight_symbol("▶ ")
-            .highlight_style(Style::default().add_modifier(Modifier::BOLD)),
+            .row_highlight_style(Style::default().add_modifier(Modifier::BOLD)),
         area, &mut state,
     );
 }
@@ -167,46 +168,69 @@ fn render_aggregate_timeline(f: &mut Frame, app: &App, area: Rect) {
         for h in 0..24 { totals[h] += fph[h] as u32; }
     }
 
+    // Firings for the currently hovered entry (Entry rows only; None for comments)
+    let hovered: Option<[u8; 24]> = {
+        let rows = app.visible_rows();
+        rows.get(app.selected).and_then(|r| {
+            if let VisibleRow::Entry(li) = r {
+                if let crate::cron::CrontabLine::Entry(e) = &app.lines[*li] {
+                    if e.enabled { return Some(e.schedule.firings_per_hour()); }
+                }
+            }
+            None
+        })
+    };
+
     let max = totals.iter().copied().max().unwrap_or(1).max(1);
 
-    // Header: hour labels
+    // Header: hour labels — highlight hovered hours in gold
     let hdr: Vec<Span> = (0..24u8).map(|h| {
-        Span::styled(format!("{:>2} ", h), Style::default().fg(C_MUTED))
+        let is_hov = hovered.map(|fph| fph[h as usize] > 0).unwrap_or(false);
+        let fg = if is_hov { C_HOV } else { C_MUTED };
+        Span::styled(format!("{:>2} ", h), Style::default().fg(fg))
     }).collect();
 
-    // Bar row: proportional height block character
+    // Bar row: base color from density, overridden to C_HOV when hovered entry fires
     let bars: Vec<Span> = totals.iter().enumerate().map(|(h, &n)| {
-        let (ch, color) = if n == 0 {
+        let is_hov = hovered.map(|fph| fph[h] > 0).unwrap_or(false);
+        let (ch, base_color) = if n == 0 {
             ("░░ ", C_DIM)
         } else {
             let frac = n as f32 / max as f32;
             match (frac * 4.0) as u8 {
-                0     => ("▂▂ ", C_BAR_LOW),
-                1     => ("▄▄ ", C_BAR_LOW),
-                2     => ("▆▆ ", C_BAR_MED),
-                _     => ("██ ", C_NEXT),
+                0 => ("▂▂ ", C_BAR_LOW),
+                1 => ("▄▄ ", C_BAR_LOW),
+                2 => ("▆▆ ", C_BAR_MED),
+                _ => ("██ ", C_NEXT),
             }
         };
-        let _ = h;
+        let color = if is_hov { C_HOV } else { base_color };
         Span::styled(ch, Style::default().fg(color))
     }).collect();
 
-    // AM/PM markers
+    // AM/PM markers — highlight if any hovered hour in that half
     let markers: Vec<Span> = (0..24u8).map(|h| {
         let lbl = match h { 0 => "AM", 12 => "PM", _ => "  " };
-        Span::styled(format!("{:<3}", lbl), Style::default().fg(C_MUTED))
+        let is_hov = hovered.map(|fph| fph[h as usize] > 0).unwrap_or(false);
+        let fg = if is_hov && lbl != "  " { C_HOV } else { C_MUTED };
+        Span::styled(format!("{:<3}", lbl), Style::default().fg(fg))
     }).collect();
 
     // Legend
     let total_jobs = schedules.len();
-    let legend = Line::from(vec![
+    let mut legend_spans = vec![
         Span::styled("░ ", Style::default().fg(C_DIM)), Span::raw("idle  "),
-        Span::styled("▂ ", Style::default().fg(C_BAR_LOW)),    Span::raw("low  "),
-        Span::styled("▆ ", Style::default().fg(C_BAR_MED)),    Span::raw("med  "),
-        Span::styled("█ ", Style::default().fg(C_NEXT)),        Span::raw("high  "),
+        Span::styled("▂ ", Style::default().fg(C_BAR_LOW)), Span::raw("low  "),
+        Span::styled("▆ ", Style::default().fg(C_BAR_MED)), Span::raw("med  "),
+        Span::styled("█ ", Style::default().fg(C_NEXT)),     Span::raw("high  "),
         Span::styled(format!("   {} active job{}", total_jobs, if total_jobs == 1 { "" } else { "s" }),
             Style::default().fg(C_MUTED)),
-    ]);
+    ];
+    if hovered.is_some() {
+        legend_spans.push(Span::styled("   ██ ", Style::default().fg(C_HOV)));
+        legend_spans.push(Span::styled("selected", Style::default().fg(C_HOV)));
+    }
+    let legend = Line::from(legend_spans);
 
     f.render_widget(
         Paragraph::new(vec![

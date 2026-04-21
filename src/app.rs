@@ -494,7 +494,7 @@ impl App {
             }
             KeyCode::Char('t') => self.toggle_selected(),
             KeyCode::Char('s') => { self.save()?; }
-            KeyCode::Char('i') => { if self.entry_count() > 0 { self.mode = AppMode::Info; } }
+            KeyCode::Char('i') => { if self.selected_is_entry() { self.mode = AppMode::Info; } }
             KeyCode::Char('c') => {
                 self.use_24h = !self.use_24h;
                 let fmt = if self.use_24h { "24-hour" } else { "12-hour" };
