@@ -104,6 +104,7 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
     ]).bottom_margin(1);
 
     let sel  = app.selected;
+    let mut comment_overlays: Vec<(usize, String, bool)> = Vec::new();
     let rows: Vec<Row> = visible.iter().enumerate().map(|(idx, row)| {
         let is_sel = idx == sel;
         let bg = if is_sel { C_SEL_BG } else { Color::Reset };
@@ -114,12 +115,13 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
                     s.trim_start_matches('#').trim().to_string()
                 } else { String::new() };
                 let line = if text.is_empty() { "#".to_string() } else { format!("# {}", text) };
+                comment_overlays.push((idx, line, is_sel));
                 Row::new(vec![
                     Cell::from("").style(Style::default().bg(bg)),
                     Cell::from("").style(Style::default().bg(bg)),
                     Cell::from("").style(Style::default().bg(bg)),
                     Cell::from("").style(Style::default().bg(bg)),
-                    Cell::from(line).style(Style::default().fg(C_CMT).bg(bg)
+                    Cell::from("").style(Style::default().fg(C_CMT).bg(bg)
                         .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() })),
                 ])
             }
@@ -157,6 +159,27 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
             .row_highlight_style(Style::default().add_modifier(Modifier::BOLD)),
         area, &mut state,
     );
+
+    // Paint comment rows over the table so they read as one full-width line.
+    let inner_w = area.width.saturating_sub(2);
+    for (idx, line, is_sel) in comment_overlays {
+        let y = area.y + 1 + 2 + idx as u16; // top border + header + header margin + row index
+        if y >= area.y + area.height.saturating_sub(1) {
+            continue;
+        }
+        let row_area = Rect::new(area.x + 1, y, inner_w, 1);
+        f.render_widget(Clear, row_area);
+        let bg = if is_sel { C_SEL_BG } else { Color::Reset };
+        let prefix = if is_sel { "▶ " } else { "  " };
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("{}{}", prefix, line),
+                Style::default().fg(C_CMT).bg(bg)
+                    .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() }),
+            ))),
+            row_area,
+        );
+    }
 }
 
 // ── Aggregate timeline (all enabled jobs) ─────────────────────────────────────
