@@ -59,20 +59,50 @@ pub fn render(f: &mut Frame, app: &mut App) {
 // ── Header ────────────────────────────────────────────────────────────────────
 
 fn render_header(f: &mut Frame, area: Rect, app: &App) {
-    let dirty = if app.dirty { Span::styled("  ✦ unsaved", Style::default().fg(C_GOLD)) } else { Span::raw("") };
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("  cronv", Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("  ·  {} job{}  ·  ",
-                app.entry_count(), if app.entry_count() == 1 { "" } else { "s" }),
-                Style::default().fg(C_MUTED)),
-            Span::styled(app.source_label(), Style::default().fg(Color::Gray)),
-            Span::styled(format!("  [{}]", if app.use_24h { "24h" } else { "12h" }),
-                Style::default().fg(C_MUTED)),
-            dirty,
-        ])).block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(C_ACCENT))),
-        area,
-    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(C_ACCENT));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let source = truncate_middle(&app.source_label(), inner.width.saturating_sub(20) as usize);
+    let left = Line::from(vec![
+        Span::styled(" cronv ", Style::default().fg(Color::Black).bg(C_ACCENT).add_modifier(Modifier::BOLD)),
+        Span::raw("  "),
+        Span::styled(
+            format!("{} job{}", app.entry_count(), if app.entry_count() == 1 { "" } else { "s" }),
+            Style::default().fg(C_GOLD).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  •  ", Style::default().fg(C_DIM)),
+        Span::styled(source, Style::default().fg(Color::Gray)),
+    ]);
+
+    let right = if app.dirty {
+        Line::from(vec![
+            Span::styled(
+                format!(" {} ", if app.use_24h { "24h" } else { "12h" }),
+                Style::default().fg(C_NEXT),
+            ),
+            Span::styled("  ", Style::default()),
+            Span::styled(" unsaved ", Style::default().fg(Color::Black).bg(C_GOLD).add_modifier(Modifier::BOLD)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(
+                format!(" {} ", if app.use_24h { "24h" } else { "12h" }),
+                Style::default().fg(C_NEXT),
+            ),
+            Span::styled("  ready ", Style::default().fg(C_MUTED)),
+        ])
+    };
+
+    let cols = Layout::horizontal([Constraint::Min(10), Constraint::Length(20)]).split(inner);
+    f.render_widget(Paragraph::new(left), cols[0]);
+    f.render_widget(Paragraph::new(right).alignment(Alignment::Right), cols[1]);
 }
 
 // ── Main table ────────────────────────────────────────────────────────────────
@@ -279,21 +309,61 @@ fn render_aggregate_timeline(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     let status = if let Some((msg, kind)) = &app.status {
-        let c = match kind { StatusKind::Success => C_GREEN, StatusKind::Error => C_ERROR, StatusKind::Info => C_ACCENT };
-        Line::from(Span::styled(msg.as_str(), Style::default().fg(c)))
-    } else { Line::from("") };
+        let (icon, c) = match kind {
+            StatusKind::Success => ("✓", C_GREEN),
+            StatusKind::Error => ("✖", C_ERROR),
+            StatusKind::Info => ("i", C_ACCENT),
+        };
+        Line::from(vec![
+            Span::styled(format!(" {} ", icon), Style::default().fg(c).add_modifier(Modifier::BOLD)),
+            Span::styled(msg.as_str(), Style::default().fg(c)),
+        ])
+    } else {
+        Line::from(Span::styled(" Ready. Select a row and press Enter to edit.", Style::default().fg(C_MUTED)))
+    };
+
+    let hints = if area.width >= 118 {
+        " [N] New  [E] Edit  [R] Raw  [D] Delete  [T] Toggle  [S] Save  |  ↑/↓ Move  Shift+↑/↓ Reorder  [I] Info  [C] Clock  [?] Help  [Q] Quit"
+    } else if area.width >= 92 {
+        " [N] New  [E] Edit  [R] Raw  [D] Delete  [T] Toggle  [S] Save  |  [I] Info  [C] Clock  [?] Help  [Q] Quit"
+    } else {
+        " [N] [E] [R] [D] [T] [S]  [I] [C] [?] [Q]"
+    };
     f.render_widget(
         Paragraph::new(vec![
             status,
-            Line::from(Span::styled(
-                " n  New    e  Edit    i  Info    r  Open $EDITOR    d  Delete    t  Toggle    Shift+↑↓  Move    s  Save    c  Clock    ?  Help    q  Quit",
-                Style::default().fg(C_MUTED),
-            )),
+            Line::from(Span::styled(hints, Style::default().fg(C_MUTED))),
         ])
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(C_MUTED))),
+        .alignment(Alignment::Left)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(C_MUTED))
+                .title(" Controls ")
+                .title_style(Style::default().fg(C_MUTED)),
+        ),
         area,
     );
+}
+
+fn truncate_middle(s: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_chars {
+        return s.to_string();
+    }
+    if max_chars <= 3 {
+        return "..."[..max_chars].to_string();
+    }
+    let left = (max_chars - 3) / 2;
+    let right = max_chars - 3 - left;
+    format!(
+        "{}...{}",
+        chars[..left].iter().collect::<String>(),
+        chars[chars.len() - right..].iter().collect::<String>()
+    )
 }
 
 // ── Comment edit modal ────────────────────────────────────────────────────────
