@@ -26,7 +26,7 @@ const C_BAR_MED: Color = Color::Rgb(60, 185, 165);
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 
-pub fn render(f: &mut Frame, app: &App) {
+pub fn render(f: &mut Frame, app: &mut App) {
     let root = f.area();
     let chunks = Layout::vertical([
         Constraint::Length(3),  // header
@@ -37,6 +37,8 @@ pub fn render(f: &mut Frame, app: &App) {
 
     render_header(f, chunks[0], app);
     render_table(f, app, chunks[1]);
+    // Store table geometry for mouse hit-testing (3=border+header+blank)
+    app.table_top_row = chunks[1].y + 1 + 2; // border + "Schedule|..." header + blank margin
     render_aggregate_timeline(f, app, chunks[2]);
     render_footer(f, app, chunks[3]);
 
@@ -75,7 +77,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
 
 // ── Main table ────────────────────────────────────────────────────────────────
 
-fn render_table(f: &mut Frame, app: &App, area: Rect) {
+fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
     let visible = app.visible_rows();
     let u24     = app.use_24h;
 
@@ -111,12 +113,13 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
                 let text = if let crate::cron::CrontabLine::Comment(s) = &app.lines[*li] {
                     s.trim_start_matches('#').trim().to_string()
                 } else { String::new() };
+                let line = if text.is_empty() { "#".to_string() } else { format!("# {}", text) };
                 Row::new(vec![
-                    Cell::from(Span::styled("#", Style::default().fg(C_MUTED).bg(bg))),
                     Cell::from("").style(Style::default().bg(bg)),
                     Cell::from("").style(Style::default().bg(bg)),
                     Cell::from("").style(Style::default().bg(bg)),
-                    Cell::from(text).style(Style::default().fg(C_CMT).bg(bg)
+                    Cell::from("").style(Style::default().bg(bg)),
+                    Cell::from(line).style(Style::default().fg(C_CMT).bg(bg)
                         .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() })),
                 ])
             }
@@ -260,7 +263,7 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(vec![
             status,
             Line::from(Span::styled(
-                " n  New    e  Edit    i  Info    d  Delete    t  Toggle    Shift+↑↓  Move    s  Save    c  Clock    ?  Help    q  Quit",
+                " n  New    e  Edit    i  Info    r  Open $EDITOR    d  Delete    t  Toggle    Shift+↑↓  Move    s  Save    c  Clock    ?  Help    q  Quit",
                 Style::default().fg(C_MUTED),
             )),
         ])
@@ -644,6 +647,7 @@ fn render_help(f: &mut Frame, area: Rect) {
         kv("i",               "Job info: next 10 runs + timeline"),
         kv("d",               "Delete selected row"),
         kv("t",               "Toggle enable / disable"),
+        kv("r",               "Open raw crontab in $VISUAL/$EDITOR"),
         kv("s",               "Save crontab"),
         kv("c",               "Toggle 12h / 24h clock"),
         kv("q / Esc",         "Quit  (prompts if unsaved)"),
@@ -667,6 +671,7 @@ fn render_help(f: &mut Frame, area: Rect) {
         popup,
     );
 }
+
 
 // ── Geometry ──────────────────────────────────────────────────────────────────
 

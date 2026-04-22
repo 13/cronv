@@ -216,6 +216,9 @@ pub struct App {
     pub dirty:         bool,
     pub source:        CrontabSource,
     pub use_24h:       bool,
+    pub raw_edit_requested: bool,
+    // pixel geometry updated by ui each frame for mouse hit-testing
+    pub table_top_row:    u16,  // absolute y of first data row
 }
 
 impl App {
@@ -223,7 +226,7 @@ impl App {
         let content = load_content(&source)?;
         let lines   = parse_crontab(&content);
         Ok(App { lines, mode: AppMode::Normal, selected: 0, form: None,
-                 comment_input: None, status: None, dirty: false, source, use_24h: true })
+                 comment_input: None, status: None, dirty: false, source, use_24h: true, raw_edit_requested: false, table_top_row: 5 })
     }
 
     // ── Visible rows ──────────────────────────────────────────────────────────
@@ -449,12 +452,47 @@ impl App {
         }
     }
 
+    pub fn start_raw(&mut self) {
+        self.raw_edit_requested = true;
+    }
+
+    pub fn take_raw_edit_request(&mut self) -> Option<String> {
+        if !self.raw_edit_requested {
+            return None;
+        }
+        self.raw_edit_requested = false;
+        Some(crate::cron::serialize_crontab(&self.lines))
+    }
+
+    pub fn apply_raw_content(&mut self, content: &str) {
+        self.lines = crate::cron::parse_crontab(content);
+        self.dirty = true;
+        self.clamp_selected();
+        self.set_status("Raw edit applied.".into(), StatusKind::Success);
+    }
+
+    pub fn notify_status(&mut self, msg: impl Into<String>, kind: StatusKind) {
+        self.set_status(msg.into(), kind);
+    }
+
     pub fn save(&mut self) -> Result<()> {
         let content = serialize_crontab(&self.lines);
         save_content(&self.source, &content)?;
         self.dirty = false;
         self.set_status("Crontab saved!".into(), StatusKind::Success);
         Ok(())
+    }
+
+    /// Called from the event loop when a left-click arrives.
+    /// `row` and `col` are absolute terminal coordinates.
+    pub fn handle_mouse_click(&mut self, row: u16, _col: u16) {
+        // table_top_row = y of first data row (after border + header + margin)
+        if row < self.table_top_row { return; }
+        let rel = (row - self.table_top_row) as usize;
+        if rel < self.visible_count() {
+            self.selected = rel;
+            self.status = None;
+        }
     }
 
     fn set_status(&mut self, msg: String, kind: StatusKind) {
@@ -500,6 +538,7 @@ impl App {
                 let fmt = if self.use_24h { "24-hour" } else { "12-hour" };
                 self.set_status(format!("Switched to {} clock.", fmt), StatusKind::Info);
             }
+            KeyCode::Char('r') => self.start_raw(),
             KeyCode::Char('?') | KeyCode::Char('h') => self.mode = AppMode::Help,
             _ => {}
         }

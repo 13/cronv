@@ -339,7 +339,7 @@ fn month_name(n: u8) -> String {
 
 fn ordinal(n: u32) -> String {
     let suf = match n % 100 {
-        11|12|13 => "th",
+        11..=13 => "th",
         _ => match n % 10 { 1=>"st", 2=>"nd", 3=>"rd", _=>"th" },
     };
     format!("{}{}", n, suf)
@@ -402,7 +402,7 @@ fn next_special(s: &str, now: NaiveDateTime) -> Option<NaiveDateTime> {
 
 // ── Next-run: 5-field ─────────────────────────────────────────────────────────
 
-fn next_standard(
+pub(crate) fn next_standard(
     min_s: &str, hr_s: &str, dom_s: &str, mon_s: &str, dow_s: &str,
     now: NaiveDateTime,
 ) -> Option<NaiveDateTime> {
@@ -426,7 +426,7 @@ fn next_standard(
         let day_ok = if dom_star && dow_star { true }
             else if dom_star { dows.contains(&dow) }
             else if dow_star { doms.contains(&dom) }
-            else { doms.contains(&dom) || dows.contains(&dow) };
+            else { doms.contains(&dom) && dows.contains(&dow) };
         if !day_ok {
             t = (t + Duration::days(1)).with_hour(0)?.with_minute(0)?.with_second(0)?;
             continue;
@@ -444,7 +444,7 @@ fn next_standard(
 
         let mn = t.minute() as u8;
         if let Some(&nm) = minutes.iter().find(|&&m| m >= mn) {
-            return Some(t.with_minute(nm as u32)?.with_second(0)?);
+            return t.with_minute(nm as u32)?.with_second(0);
         } else if let Some(nh) = hours.iter().find(|&&h| h > hr) {
             t = t.with_hour(*nh as u32)?.with_minute(0)?.with_second(0)?;
         } else {
@@ -455,14 +455,14 @@ fn next_standard(
 }
 
 fn advance_to_month(t: NaiveDateTime, months: &[u8]) -> Option<NaiveDateTime> {
+    // Build the date from scratch to avoid invalid-day errors when e.g. Jan 31 → Feb.
     let cur = t.month() as u8;
-    if let Some(&m) = months.iter().find(|&&m| m > cur) {
-        t.with_month(m as u32)?.with_day(1)?.with_hour(0)?.with_minute(0)?.with_second(0)
+    let (year, next_mon) = if let Some(&m) = months.iter().find(|&&m| m > cur) {
+        (t.year(), m as u32)
     } else {
-        t.with_year(t.year() + 1)?
-            .with_month(months[0] as u32)?.with_day(1)?
-            .with_hour(0)?.with_minute(0)?.with_second(0)
-    }
+        (t.year() + 1, months[0] as u32)
+    };
+    chrono::NaiveDate::from_ymd_opt(year, next_mon, 1)?.and_hms_opt(0, 0, 0)
 }
 
 // ── Field expansion ───────────────────────────────────────────────────────────
