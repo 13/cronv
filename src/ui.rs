@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
 
@@ -371,9 +371,9 @@ fn truncate_middle(s: &str, max_chars: usize) -> String {
 fn render_comment_modal(f: &mut Frame, app: &App, area: Rect) {
     let Some((input, _)) = &app.comment_input else { return };
 
-    let w = 64_u16.min(area.width.saturating_sub(4));
-    let modal = centered_rect(w, 8, area);
-    f.render_widget(Clear, modal);
+    let w = 70_u16.min(area.width.saturating_sub(4));
+    let modal = centered_rect(w, 9, area);
+    render_modal_shell(f, area, modal, " Edit Comment ", C_CMT);
 
     let inner = inner_rect(modal);
     let rows = Layout::vertical([
@@ -402,20 +402,10 @@ fn render_comment_modal(f: &mut Frame, app: &App, area: Rect) {
     // Hint
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            " Enter / Ctrl+S  Save    Esc  Cancel    (empty = delete line)",
+            " [Enter/Ctrl+S] Save    [Esc] Cancel    (empty = delete)",
             Style::default().fg(C_MUTED),
         ))).alignment(Alignment::Center),
         rows[2],
-    );
-
-    // Outer border
-    f.render_widget(
-        Block::default().borders(Borders::ALL)
-            .border_style(Style::default().fg(C_CMT))
-            .title(" Edit Comment  (#  from entry editor)")
-            .title_alignment(Alignment::Center)
-            .title_style(Style::default().fg(C_CMT).add_modifier(Modifier::BOLD)),
-        modal,
     );
 }
 
@@ -426,14 +416,8 @@ pub fn render_edit_modal(f: &mut Frame, app: &App, area: Rect) {
     let w = 72_u16.min(area.width.saturating_sub(4));
     let h = 24_u16.min(area.height.saturating_sub(4));
     let modal = centered_rect(w, h, area);
-    f.render_widget(Clear, modal);
     let title = if form.editing_index.is_some() { " Edit Cron Job " } else { " New Cron Job " };
-    f.render_widget(
-        Block::default().borders(Borders::ALL)
-            .border_style(Style::default().fg(C_ACCENT))
-            .title(title).title_alignment(Alignment::Center),
-        modal,
-    );
+    render_modal_shell(f, area, modal, title, C_ACCENT);
     render_form_body(f, form, app.use_24h, inner_rect(modal));
 }
 
@@ -589,7 +573,7 @@ fn render_info_panel(f: &mut Frame, app: &App, area: Rect) {
     let w = 72_u16.min(area.width.saturating_sub(4));
     let h = 30_u16.min(area.height.saturating_sub(2));
     let popup = centered_rect(w, h, area);
-    f.render_widget(Clear, popup);
+    render_modal_shell(f, area, popup, " Job Info ", C_ACCENT);
 
     let inner = inner_rect(popup);
     let u24   = app.use_24h;
@@ -652,13 +636,6 @@ fn render_info_panel(f: &mut Frame, app: &App, area: Rect) {
         rows[6],
     );
 
-    f.render_widget(
-        Block::default().borders(Borders::ALL)
-            .border_style(Style::default().fg(C_ACCENT))
-            .title(" Job Info ").title_alignment(Alignment::Center)
-            .title_style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
-        popup,
-    );
 }
 
 fn render_single_timeline(f: &mut Frame, counts: [u8; 24], area: Rect) {
@@ -689,8 +666,8 @@ fn render_single_timeline(f: &mut Frame, counts: [u8; 24], area: Rect) {
 
 fn render_confirm(f: &mut Frame, title: &str, msg: &str, actions: &str, color: Color, area: Rect) {
     let w = 60_u16.min(area.width.saturating_sub(4));
-    let dialog = centered_rect(w, 7, area);
-    f.render_widget(Clear, dialog);
+    let dialog = centered_rect(w, 8, area);
+    render_modal_shell(f, area, dialog, &format!(" {} ", title), color);
     f.render_widget(
         Paragraph::new(vec![
             Line::from(""),
@@ -699,12 +676,8 @@ fn render_confirm(f: &mut Frame, title: &str, msg: &str, actions: &str, color: C
             Line::from(Span::styled(actions, Style::default().fg(C_GOLD))),
             Line::from(""),
         ])
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL)
-            .border_style(Style::default().fg(color))
-            .title(format!(" {} ", title)).title_alignment(Alignment::Center)
-            .title_style(Style::default().fg(color).add_modifier(Modifier::BOLD))),
-        dialog,
+        .alignment(Alignment::Center),
+        inner_rect(dialog),
     );
 }
 
@@ -714,7 +687,7 @@ fn render_help(f: &mut Frame, area: Rect) {
     let w = 60_u16.min(area.width.saturating_sub(4));
     let h = 32_u16.min(area.height.saturating_sub(4));
     let popup = centered_rect(w, h, area);
-    f.render_widget(Clear, popup);
+    render_modal_shell(f, area, popup, " Help ", C_ACCENT);
 
     fn sec(s: &'static str) -> Line<'static> {
         Line::from(Span::styled(s, Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)))
@@ -757,11 +730,26 @@ fn render_help(f: &mut Frame, area: Rect) {
 
     f.render_widget(
         Paragraph::new(lines).wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL)
-                .border_style(Style::default().fg(C_ACCENT))
-                .title(" Help ").title_alignment(Alignment::Center)
-                .title_style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD))),
-        popup,
+            .block(Block::default()),
+        inner_rect(popup),
+    );
+}
+
+fn render_modal_shell(f: &mut Frame, root: Rect, modal: Rect, title: &str, color: Color) {
+    f.render_widget(
+        Block::default().style(Style::default().bg(Color::Rgb(10, 12, 18))),
+        root,
+    );
+    f.render_widget(Clear, modal);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(color))
+            .title(title)
+            .title_alignment(Alignment::Center)
+            .title_style(Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        modal,
     );
 }
 

@@ -499,6 +499,10 @@ impl App {
         self.status = Some((msg, kind));
     }
 
+    pub fn is_modal_open(&self) -> bool {
+        !matches!(self.mode, AppMode::Normal)
+    }
+
     // ── Key handling ──────────────────────────────────────────────────────────
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {

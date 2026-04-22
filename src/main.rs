@@ -118,15 +118,17 @@ fn event_loop(
                 if app.handle_key(key)? { break; }
             }
             Event::Mouse(mouse) => {
-                match mouse.kind {
-                    // Left click — select the row under the cursor
-                    MouseEventKind::Down(MouseButton::Left) => {
-                        app.handle_mouse_click(mouse.row, mouse.column);
+                if !app.is_modal_open() {
+                    match mouse.kind {
+                        // Left click — select the row under the cursor
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            app.handle_mouse_click(mouse.row, mouse.column);
+                        }
+                        // Scroll wheel — navigate list
+                        MouseEventKind::ScrollUp   => { app.move_up(); }
+                        MouseEventKind::ScrollDown => { app.move_down(); }
+                        _ => {}
                     }
-                    // Scroll wheel — navigate list
-                    MouseEventKind::ScrollUp   => { app.move_up(); }
-                    MouseEventKind::ScrollDown => { app.move_down(); }
-                    _ => {}
                 }
             }
             _ => {}
