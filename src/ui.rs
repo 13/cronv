@@ -2,11 +2,11 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
 
-use crate::app::{App, AppMode, EditForm, FormField, StatusKind, TextInput, VisibleRow};
+use crate::app::{App, AppMode, EditClickTarget, EditForm, FormField, StatusKind, TextInput, UiRect, VisibleRow};
 use crate::cron::FIELD_HELP;
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -27,6 +27,7 @@ const C_BAR_MED: Color = Color::Rgb(60, 185, 165);
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 pub fn render(f: &mut Frame, app: &mut App) {
+    app.clear_mouse_regions();
     let root = f.area();
     let chunks = Layout::vertical([
         Constraint::Length(3),  // header
@@ -46,12 +47,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
         AppMode::EditEntry     => render_edit_modal(f, app, root),
         AppMode::EditComment   => render_comment_modal(f, app, root),
         AppMode::Info          => render_info_panel(f, app, root),
-        AppMode::ConfirmDelete => render_confirm(f, "Delete Row",
+        AppMode::ConfirmDelete => render_confirm(f, app, "Delete Row",
             "Delete this row?", "[y] Yes    [n] Cancel", C_ERROR, root),
-        AppMode::ConfirmQuit   => render_confirm(f, "Unsaved Changes",
+        AppMode::ConfirmQuit   => render_confirm(f, app, "Unsaved Changes",
             "You have unsaved changes.",
             "[s] Save & quit    [y] Discard & quit    [n] Cancel", C_GOLD, root),
-        AppMode::Help          => render_help(f, root),
+        AppMode::Help          => render_help(f, app, root),
         AppMode::Normal        => {}
     }
 }
@@ -368,12 +369,13 @@ fn truncate_middle(s: &str, max_chars: usize) -> String {
 
 // ── Comment edit modal ────────────────────────────────────────────────────────
 
-fn render_comment_modal(f: &mut Frame, app: &App, area: Rect) {
-    let Some((input, _)) = &app.comment_input else { return };
+fn render_comment_modal(f: &mut Frame, app: &mut App, area: Rect) {
+    let Some((input, _)) = app.comment_input.clone() else { return };
 
     let w = 70_u16.min(area.width.saturating_sub(4));
     let modal = centered_rect(w, 9, area);
     render_modal_shell(f, area, modal, " Edit Comment ", C_CMT);
+    app.set_modal_bounds(to_ui_rect(modal));
 
     let inner = inner_rect(modal);
     let rows = Layout::vertical([
@@ -381,6 +383,7 @@ fn render_comment_modal(f: &mut Frame, app: &App, area: Rect) {
         Constraint::Length(1), // spacer
         Constraint::Length(1), // hint
     ]).split(inner);
+    app.set_comment_input_bounds(to_ui_rect(rows[0]));
 
     // Text field
     f.render_widget(
@@ -402,7 +405,7 @@ fn render_comment_modal(f: &mut Frame, app: &App, area: Rect) {
     // Hint
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            " [Enter/Ctrl+S] Save    [Esc] Cancel    (empty = delete)",
+            " [Enter] Save    [Ctrl+S] Save    [Esc] Cancel    (empty = delete)",
             Style::default().fg(C_MUTED),
         ))).alignment(Alignment::Center),
         rows[2],
@@ -411,17 +414,18 @@ fn render_comment_modal(f: &mut Frame, app: &App, area: Rect) {
 
 // ── Edit modal (cron entry) ───────────────────────────────────────────────────
 
-pub fn render_edit_modal(f: &mut Frame, app: &App, area: Rect) {
-    let Some(form) = &app.form else { return };
+pub fn render_edit_modal(f: &mut Frame, app: &mut App, area: Rect) {
+    let Some(form) = app.form.clone() else { return };
     let w = 72_u16.min(area.width.saturating_sub(4));
     let h = 24_u16.min(area.height.saturating_sub(4));
     let modal = centered_rect(w, h, area);
     let title = if form.editing_index.is_some() { " Edit Cron Job " } else { " New Cron Job " };
     render_modal_shell(f, area, modal, title, C_ACCENT);
-    render_form_body(f, form, app.use_24h, inner_rect(modal));
+    app.set_modal_bounds(to_ui_rect(modal));
+    render_form_body(f, app, &form, app.use_24h, inner_rect(modal));
 }
 
-fn render_form_body(f: &mut Frame, form: &EditForm, use_24h: bool, area: Rect) {
+fn render_form_body(f: &mut Frame, app: &mut App, form: &EditForm, use_24h: bool, area: Rect) {
     let rows = Layout::vertical([
         Constraint::Length(1), // type toggle
         Constraint::Length(1), // spacer
@@ -434,11 +438,15 @@ fn render_form_body(f: &mut Frame, form: &EditForm, use_24h: bool, area: Rect) {
         Constraint::Length(1), // hints
     ]).split(area);
 
-    render_type_toggle(f, form, rows[0]);
+    let (special_toggle, standard_toggle) = render_type_toggle(f, form, rows[0]);
 
     let sched_area = rows[2];
+    let mut targets: Vec<(EditClickTarget, UiRect)> = Vec::new();
+    targets.push((EditClickTarget::ToggleSpecial, special_toggle));
+    targets.push((EditClickTarget::ToggleStandard, standard_toggle));
     if form.is_special {
         render_field(f, "Special (@keyword)", &form.special, form.focused == FormField::Special, sched_area);
+        targets.push((EditClickTarget::Field(FormField::Special), to_ui_rect(sched_area)));
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "  @reboot @hourly @daily @weekly @monthly @yearly @annually @midnight",
@@ -456,6 +464,11 @@ fn render_form_body(f: &mut Frame, form: &EditForm, use_24h: bool, area: Rect) {
         render_field(f, "Day",     &form.day,     form.focused == FormField::Day,     fcols[2]);
         render_field(f, "Month",   &form.month,   form.focused == FormField::Month,   fcols[3]);
         render_field(f, "Weekday", &form.weekday, form.focused == FormField::Weekday, fcols[4]);
+        targets.push((EditClickTarget::Field(FormField::Minute), to_ui_rect(fcols[0])));
+        targets.push((EditClickTarget::Field(FormField::Hour), to_ui_rect(fcols[1])));
+        targets.push((EditClickTarget::Field(FormField::Day), to_ui_rect(fcols[2])));
+        targets.push((EditClickTarget::Field(FormField::Month), to_ui_rect(fcols[3])));
+        targets.push((EditClickTarget::Field(FormField::Weekday), to_ui_rect(fcols[4])));
         render_field_help(f, form, rows[3]);
     }
 
@@ -470,10 +483,12 @@ fn render_form_body(f: &mut Frame, form: &EditForm, use_24h: bool, area: Rect) {
     );
 
     render_field(f, "Command", &form.command, form.focused == FormField::Command, rows[6]);
+    targets.push((EditClickTarget::Field(FormField::Command), to_ui_rect(rows[6])));
+    app.set_edit_click_targets(targets);
 
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            " Tab/Shift+Tab  Fields    F1  Toggle type    Ctrl+S  Save    Esc  Cancel",
+            " [Tab/Shift+Tab] Fields    [F1] Toggle    [Ctrl+S] Save    [Esc] Cancel",
             Style::default().fg(C_MUTED),
         ))).alignment(Alignment::Center),
         rows[8],
@@ -501,20 +516,32 @@ fn render_field_help(f: &mut Frame, form: &EditForm, area: Rect) {
     );
 }
 
-fn render_type_toggle(f: &mut Frame, form: &EditForm, area: Rect) {
+fn render_type_toggle(f: &mut Frame, form: &EditForm, area: Rect) -> (UiRect, UiRect) {
     let (sp, st) = if form.is_special {
         (Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD), Style::default().fg(C_MUTED))
     } else {
         (Style::default().fg(C_MUTED), Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD))
     };
+
+    let prefix = "[F1] ";
+    let special = "@Special";
+    let sep = "   ·   ";
+    let standard = "Standard 5-field";
+
+    let sp_x = area.x + prefix.len() as u16;
+    let st_x = sp_x + special.len() as u16 + sep.len() as u16;
+    let sp_rect = Rect::new(sp_x, area.y, special.len() as u16, 1);
+    let st_rect = Rect::new(st_x, area.y, standard.len() as u16, 1);
+
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("F1 ", Style::default().fg(C_MUTED)),
-            Span::styled("@Special", sp), Span::raw("   ·   "),
-            Span::styled("Standard 5-field", st),
+            Span::styled(prefix, Style::default().fg(C_MUTED)),
+            Span::styled(special, sp), Span::raw(sep),
+            Span::styled(standard, st),
         ])),
         area,
     );
+    (to_ui_rect(sp_rect), to_ui_rect(st_rect))
 }
 
 fn render_field(f: &mut Frame, label: &str, input: &TextInput, focused: bool, area: Rect) {
@@ -561,7 +588,7 @@ fn set_cursor(f: &mut Frame, form: &EditForm, area: Rect, sched_area: Rect) {
 
 // ── Info panel (per-job) ──────────────────────────────────────────────────────
 
-fn render_info_panel(f: &mut Frame, app: &App, area: Rect) {
+fn render_info_panel(f: &mut Frame, app: &mut App, area: Rect) {
     // Find the selected entry (skip if cursor is on a comment)
     let entry = app.visible_rows().into_iter().nth(app.selected).and_then(|r| {
         if let VisibleRow::Entry(li) = r {
@@ -574,6 +601,7 @@ fn render_info_panel(f: &mut Frame, app: &App, area: Rect) {
     let h = 30_u16.min(area.height.saturating_sub(2));
     let popup = centered_rect(w, h, area);
     render_modal_shell(f, area, popup, " Job Info ", C_ACCENT);
+    app.set_modal_bounds(to_ui_rect(popup));
 
     let inner = inner_rect(popup);
     let u24   = app.use_24h;
@@ -631,7 +659,7 @@ fn render_info_panel(f: &mut Frame, app: &App, area: Rect) {
 
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "  Any key to close", Style::default().fg(C_MUTED),
+            "  [Any key] Close", Style::default().fg(C_MUTED),
         ))).alignment(Alignment::Center),
         rows[6],
     );
@@ -664,10 +692,11 @@ fn render_single_timeline(f: &mut Frame, counts: [u8; 24], area: Rect) {
 
 // ── Confirm dialog ────────────────────────────────────────────────────────────
 
-fn render_confirm(f: &mut Frame, title: &str, msg: &str, actions: &str, color: Color, area: Rect) {
+fn render_confirm(f: &mut Frame, app: &mut App, title: &str, msg: &str, actions: &str, color: Color, area: Rect) {
     let w = 60_u16.min(area.width.saturating_sub(4));
     let dialog = centered_rect(w, 8, area);
     render_modal_shell(f, area, dialog, &format!(" {} ", title), color);
+    app.set_modal_bounds(to_ui_rect(dialog));
     f.render_widget(
         Paragraph::new(vec![
             Line::from(""),
@@ -683,11 +712,12 @@ fn render_confirm(f: &mut Frame, title: &str, msg: &str, actions: &str, color: C
 
 // ── Help overlay ──────────────────────────────────────────────────────────────
 
-fn render_help(f: &mut Frame, area: Rect) {
+fn render_help(f: &mut Frame, app: &mut App, area: Rect) {
     let w = 60_u16.min(area.width.saturating_sub(4));
     let h = 32_u16.min(area.height.saturating_sub(4));
     let popup = centered_rect(w, h, area);
     render_modal_shell(f, area, popup, " Help ", C_ACCENT);
+    app.set_modal_bounds(to_ui_rect(popup));
 
     fn sec(s: &'static str) -> Line<'static> {
         Line::from(Span::styled(s, Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)))
@@ -744,7 +774,6 @@ fn render_modal_shell(f: &mut Frame, root: Rect, modal: Rect, title: &str, color
     f.render_widget(
         Block::default()
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(color))
             .title(title)
             .title_alignment(Alignment::Center)
@@ -767,3 +796,8 @@ fn centered_rect(w: u16, h: u16, area: Rect) -> Rect {
 fn inner_rect(r: Rect) -> Rect {
     Rect::new(r.x+1, r.y+1, r.width.saturating_sub(2), r.height.saturating_sub(2))
 }
+
+fn to_ui_rect(r: Rect) -> UiRect {
+    UiRect { x: r.x, y: r.y, width: r.width, height: r.height }
+}
+

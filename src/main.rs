@@ -118,7 +118,11 @@ fn event_loop(
                 if app.handle_key(key)? { break; }
             }
             Event::Mouse(mouse) => {
-                if !app.is_modal_open() {
+                if app.is_modal_open() {
+                    if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                        app.handle_modal_click(mouse.row, mouse.column);
+                    }
+                } else {
                     match mouse.kind {
                         // Left click — select the row under the cursor
                         MouseEventKind::Down(MouseButton::Left) => {

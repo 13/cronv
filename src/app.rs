@@ -3,6 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::cron::{parse_crontab, serialize_crontab, CronEntry, CronSchedule, CrontabLine};
 
@@ -204,6 +205,30 @@ pub enum VisibleRow {
     Comment(usize), // index into lines[], holds Comment
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct UiRect {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+#[derive(Debug, Clone)]
+pub enum EditClickTarget {
+    Field(FormField),
+    ToggleSpecial,
+    ToggleStandard,
+}
+
+impl UiRect {
+    pub fn contains(&self, row: u16, col: u16) -> bool {
+        row >= self.y
+            && row < self.y.saturating_add(self.height)
+            && col >= self.x
+            && col < self.x.saturating_add(self.width)
+    }
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 
 pub struct App {
@@ -219,6 +244,11 @@ pub struct App {
     pub raw_edit_requested: bool,
     // pixel geometry updated by ui each frame for mouse hit-testing
     pub table_top_row:    u16,  // absolute y of first data row
+    pub modal_bounds: Option<UiRect>,
+    pub comment_input_bounds: Option<UiRect>,
+    pub edit_click_targets: Vec<(EditClickTarget, UiRect)>,
+    pub last_click_row: Option<usize>,
+    pub last_click_at: Option<Instant>,
 }
 
 impl App {
@@ -226,7 +256,39 @@ impl App {
         let content = load_content(&source)?;
         let lines   = parse_crontab(&content);
         Ok(App { lines, mode: AppMode::Normal, selected: 0, form: None,
-                 comment_input: None, status: None, dirty: false, source, use_24h: true, raw_edit_requested: false, table_top_row: 5 })
+                 comment_input: None, status: None, dirty: false, source, use_24h: true, raw_edit_requested: false, table_top_row: 5,
+                 modal_bounds: None, comment_input_bounds: None, edit_click_targets: Vec::new(),
+                 last_click_row: None, last_click_at: None })
+    }
+
+    pub fn clear_mouse_regions(&mut self) {
+        self.modal_bounds = None;
+        self.comment_input_bounds = None;
+        self.edit_click_targets.clear();
+    }
+
+    pub fn set_modal_bounds(&mut self, rect: UiRect) {
+        self.modal_bounds = Some(rect);
+    }
+
+    pub fn set_comment_input_bounds(&mut self, rect: UiRect) {
+        self.comment_input_bounds = Some(rect);
+    }
+
+    pub fn set_edit_click_targets(&mut self, targets: Vec<(EditClickTarget, UiRect)>) {
+        self.edit_click_targets = targets;
+    }
+
+    pub fn visible_index_for_mouse_row(&self, row: u16) -> Option<usize> {
+        if row < self.table_top_row {
+            return None;
+        }
+        let rel = (row - self.table_top_row) as usize;
+        if rel < self.visible_count() {
+            Some(rel)
+        } else {
+            None
+        }
     }
 
     // ── Visible rows ──────────────────────────────────────────────────────────
@@ -486,12 +548,25 @@ impl App {
     /// Called from the event loop when a left-click arrives.
     /// `row` and `col` are absolute terminal coordinates.
     pub fn handle_mouse_click(&mut self, row: u16, _col: u16) {
-        // table_top_row = y of first data row (after border + header + margin)
-        if row < self.table_top_row { return; }
-        let rel = (row - self.table_top_row) as usize;
-        if rel < self.visible_count() {
+        if let Some(rel) = self.visible_index_for_mouse_row(row) {
             self.selected = rel;
             self.status = None;
+
+            let now = Instant::now();
+            let is_double = self.last_click_row == Some(rel)
+                && self
+                    .last_click_at
+                    .map(|t| now.duration_since(t) <= Duration::from_millis(350))
+                    .unwrap_or(false);
+
+            self.last_click_row = Some(rel);
+            self.last_click_at = Some(now);
+
+            if is_double {
+                self.start_edit();
+                self.last_click_row = None;
+                self.last_click_at = None;
+            }
         }
     }
 
@@ -501,6 +576,61 @@ impl App {
 
     pub fn is_modal_open(&self) -> bool {
         !matches!(self.mode, AppMode::Normal)
+    }
+
+    pub fn handle_modal_click(&mut self, row: u16, col: u16) {
+        let inside_modal = self.modal_bounds.map(|r| r.contains(row, col)).unwrap_or(false);
+        if !inside_modal {
+            match self.mode {
+                AppMode::EditEntry => self.cancel_edit(),
+                AppMode::EditComment => self.cancel_comment(),
+                AppMode::ConfirmDelete | AppMode::ConfirmQuit | AppMode::Info | AppMode::Help => {
+                    self.mode = AppMode::Normal;
+                }
+                AppMode::Normal => {}
+            }
+            return;
+        }
+
+        match self.mode {
+            AppMode::EditComment => {
+                if let Some(field) = self.comment_input_bounds {
+                    if field.contains(row, col) {
+                        if let Some((input, _)) = &mut self.comment_input {
+                            set_input_cursor_from_click(input, field, col);
+                        }
+                    }
+                }
+            }
+            AppMode::EditEntry => {
+                let mut picked: Option<(EditClickTarget, UiRect)> = None;
+                for (field, rect) in &self.edit_click_targets {
+                    if rect.contains(row, col) {
+                        picked = Some((field.clone(), *rect));
+                        break;
+                    }
+                }
+                if let Some((target, rect)) = picked {
+                    if let Some(form) = &mut self.form {
+                        match target {
+                            EditClickTarget::Field(field) => {
+                                form.focused = field;
+                                set_input_cursor_from_click(form.active_input_mut(), rect, col);
+                            }
+                            EditClickTarget::ToggleSpecial => {
+                                form.is_special = true;
+                                form.focused = FormField::Special;
+                            }
+                            EditClickTarget::ToggleStandard => {
+                                form.is_special = false;
+                                form.focused = FormField::Minute;
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     // ── Key handling ──────────────────────────────────────────────────────────
@@ -631,6 +761,17 @@ impl App {
             _ => self.mode = AppMode::Normal,
         }
         Ok(false)
+    }
+}
+
+fn set_input_cursor_from_click(input: &mut TextInput, field: UiRect, col: u16) {
+    let left = field.x.saturating_add(1);
+    let right = field.x.saturating_add(field.width.saturating_sub(1));
+    let click = col.clamp(left, right);
+    let max = input.value.len();
+    input.cursor = (click.saturating_sub(left)) as usize;
+    if input.cursor > max {
+        input.cursor = max;
     }
 }
 
