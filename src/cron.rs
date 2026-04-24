@@ -198,7 +198,7 @@ fn describe_standard(
     let mon_desc: Option<String> = if month == "*" {
         None
     } else {
-        expand(month, 1, 12).map(|mv| describe_months(&mv))
+        describe_month_expr(month)
     };
 
     // ── Assemble ──────────────────────────────────────────────────────────────
@@ -229,6 +229,28 @@ fn describe_standard(
             (Some(t), None) => format!("Monthly on {} at {}", dom, t),
             (None, Some(m)) => format!("{} on {}", m, dom),
             (None, None) => format!("Monthly on {}", dom),
+        };
+    }
+
+    if day != "*" && weekday != "*" {
+        let dom = describe_dom(day);
+        let wd = describe_weekday_on(weekday);
+        return match (&time, &mon_desc) {
+            (Some(t), Some(m)) => format!(
+                "{} on {} and on {} in {}",
+                describe_when_prefix(t),
+                dom,
+                wd,
+                m
+            ),
+            (Some(t), None) => format!(
+                "{} on {} and on {}",
+                describe_when_prefix(t),
+                dom,
+                wd
+            ),
+            (None, Some(m)) => format!("On {} and on {} in {}", dom, wd, m),
+            (None, None) => format!("On {} and on {}", dom, wd),
         };
     }
 
@@ -346,6 +368,17 @@ fn describe_months(mv: &[u8]) -> String {
     join_and(&names)
 }
 
+fn describe_month_expr(s: &str) -> Option<String> {
+    if let Some(n) = step_n(s) {
+        return if n <= 1 {
+            Some("every month".into())
+        } else {
+            Some(format!("every {} month", ordinal(n)))
+        };
+    }
+    expand(s, 1, 12).map(|mv| describe_months(&mv))
+}
+
 // ── Weekday description ───────────────────────────────────────────────────────
 
 const WD_PLURAL: [&str; 7] = [
@@ -397,6 +430,31 @@ fn describe_weekdays(s: &str) -> String {
         return WD_PLURAL[i].into();
     }
     s.into()
+}
+
+fn describe_weekday_on(s: &str) -> String {
+    if let Some(i) = parse_wd(s) {
+        return WD_SINGULAR[i].into();
+    }
+    if s.contains(',') {
+        let names: Vec<&str> = s
+            .split(',')
+            .filter_map(|p| parse_wd(p.trim()))
+            .map(|i| WD_SINGULAR[i])
+            .collect();
+        if !names.is_empty() {
+            return join_and_strs(&names);
+        }
+    }
+    describe_weekdays(s)
+}
+
+fn describe_when_prefix(t: &str) -> String {
+    if t.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        format!("At {}", t)
+    } else {
+        capitalize_first(t)
+    }
 }
 
 fn parse_wd(s: &str) -> Option<usize> {
@@ -915,3 +973,33 @@ pub const FIELD_HELP: [(&str, &str, &str); 5] = [
     ("Month", "1–12", "*/3  2-4   1,6,12"),
     ("Weekday", "0–7 (0/7=Sun)", "1-5  0,6  MON-FRI"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn describes_dom_and_weekday_with_month_step() {
+        assert_eq!(
+            describe_standard("0", "13", "1", "*/5", "7", true),
+            "At 13:00 on the 1st and on Sunday in every 5th month"
+        );
+    }
+
+    #[test]
+    fn describes_dom_and_weekday_naturally_without_month_constraint() {
+        assert_eq!(
+            describe_standard("0", "13", "1", "*", "7", true),
+            "At 13:00 on the 1st and on Sunday"
+        );
+    }
+
+    #[test]
+    fn keeps_first_weekday_of_month_wording() {
+        assert_eq!(
+            describe_standard("5", "4", "1-7", "*", "0", true),
+            "First Sunday of the month at 04:05"
+        );
+    }
+}
+
