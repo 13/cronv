@@ -651,13 +651,13 @@ impl App {
     }
 
     pub fn toggle_selected(&mut self) {
-        if let Some(i) = self.selected_line_idx() {
-            if let CrontabLine::Entry(e) = &mut self.lines[i] {
-                e.enabled = !e.enabled;
-                self.dirty = true;
-                let s = if e.enabled { "enabled" } else { "disabled" };
-                self.set_status(format!("Entry {}.", s), StatusKind::Info);
-            }
+        if let Some(i) = self.selected_line_idx()
+            && let CrontabLine::Entry(e) = &mut self.lines[i]
+        {
+            e.enabled = !e.enabled;
+            self.dirty = true;
+            let s = if e.enabled { "enabled" } else { "disabled" };
+            self.set_status(format!("Entry {}.", s), StatusKind::Info);
         }
     }
 
@@ -744,12 +744,11 @@ impl App {
 
         match self.mode {
             AppMode::EditComment => {
-                if let Some(field) = self.comment_input_bounds {
-                    if field.contains(row, col) {
-                        if let Some((input, _)) = &mut self.comment_input {
-                            set_input_cursor_from_click(input, field, col);
-                        }
-                    }
+                if let Some(field) = self.comment_input_bounds
+                    && field.contains(row, col)
+                    && let Some((input, _)) = &mut self.comment_input
+                {
+                    set_input_cursor_from_click(input, field, col);
                 }
             }
             AppMode::EditEntry => {
@@ -760,21 +759,21 @@ impl App {
                         break;
                     }
                 }
-                if let Some((target, rect)) = picked {
-                    if let Some(form) = &mut self.form {
-                        match target {
-                            EditClickTarget::Field(field) => {
-                                form.focused = field;
-                                set_input_cursor_from_click(form.active_input_mut(), rect, col);
-                            }
-                            EditClickTarget::ToggleSpecial => {
-                                form.is_special = true;
-                                form.focused = FormField::Special;
-                            }
-                            EditClickTarget::ToggleStandard => {
-                                form.is_special = false;
-                                form.focused = FormField::Minute;
-                            }
+                if let Some((target, rect)) = picked
+                    && let Some(form) = &mut self.form
+                {
+                    match target {
+                        EditClickTarget::Field(field) => {
+                            form.focused = field;
+                            set_input_cursor_from_click(form.active_input_mut(), rect, col);
+                        }
+                        EditClickTarget::ToggleSpecial => {
+                            form.is_special = true;
+                            form.focused = FormField::Special;
+                        }
+                        EditClickTarget::ToggleStandard => {
+                            form.is_special = false;
+                            form.focused = FormField::Minute;
                         }
                     }
                 }
@@ -822,25 +821,15 @@ impl App {
             KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => self.move_row_up(),
             KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => self.move_row_down(),
             KeyCode::Char('n') | KeyCode::Char('a') => self.start_add(),
-            KeyCode::Enter | KeyCode::Char('e') => {
-                if self.visible_count() > 0 {
-                    self.start_edit();
-                }
-            }
-            KeyCode::Char('d') | KeyCode::Delete => {
-                if self.visible_count() > 0 {
-                    self.mode = AppMode::ConfirmDelete;
-                }
+            KeyCode::Enter | KeyCode::Char('e') if self.visible_count() > 0 => self.start_edit(),
+            KeyCode::Char('d') | KeyCode::Delete if self.visible_count() > 0 => {
+                self.mode = AppMode::ConfirmDelete;
             }
             KeyCode::Char('t') => self.toggle_selected(),
             KeyCode::Char('s') => {
                 self.save()?;
             }
-            KeyCode::Char('i') => {
-                if self.selected_is_entry() {
-                    self.mode = AppMode::Info;
-                }
-            }
+            KeyCode::Char('i') if self.selected_is_entry() => self.mode = AppMode::Info,
             KeyCode::Char('c') => {
                 self.use_24h = !self.use_24h;
                 let fmt = if self.use_24h { "24-hour" } else { "12-hour" };

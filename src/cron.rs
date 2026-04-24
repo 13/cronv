@@ -89,7 +89,7 @@ impl CronSchedule {
                 let mins = expand(minute, 0, 59).unwrap_or_default();
                 let hrs = expand(hour, 0, 23).unwrap_or_default();
                 for h in hrs {
-                    counts[h as usize] = (mins.len() as u8).min(255);
+                    counts[h as usize] = mins.len() as u8;
                 }
             }
         }
@@ -370,16 +370,16 @@ const WD_ABBREV: [&str; 7] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
 fn describe_weekdays(s: &str) -> String {
     // Range
-    if let Some((a, b)) = s.split_once('-') {
-        if let (Some(si), Some(ei)) = (parse_wd(a), parse_wd(b)) {
-            if si == 1 && ei == 5 {
-                return "Weekdays".into();
-            }
-            if si == 0 && ei == 6 {
-                return "Every day".into();
-            }
-            return format!("{} through {}", WD_PLURAL[si], WD_PLURAL[ei % 7]);
+    if let Some((a, b)) = s.split_once('-')
+        && let (Some(si), Some(ei)) = (parse_wd(a), parse_wd(b))
+    {
+        if si == 1 && ei == 5 {
+            return "Weekdays".into();
         }
+        if si == 0 && ei == 6 {
+            return "Every day".into();
+        }
+        return format!("{} through {}", WD_PLURAL[si], WD_PLURAL[ei % 7]);
     }
     // Comma list
     if s.contains(',') {
@@ -417,10 +417,10 @@ fn describe_dom(s: &str) -> String {
     if let Ok(n) = s.parse::<u32>() {
         return format!("the {}", ordinal(n));
     }
-    if let Some((a, b)) = s.split_once('-') {
-        if let (Ok(a), Ok(b)) = (a.parse::<u32>(), b.parse::<u32>()) {
-            return format!("days {} to {}", a, b);
-        }
+    if let Some((a, b)) = s.split_once('-')
+        && let (Ok(a), Ok(b)) = (a.parse::<u32>(), b.parse::<u32>())
+    {
+        return format!("days {} to {}", a, b);
     }
     if s == "L" {
         return "the last day".into();

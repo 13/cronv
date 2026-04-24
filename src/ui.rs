@@ -278,12 +278,11 @@ fn render_aggregate_timeline(f: &mut Frame, app: &App, area: Rect) {
     let hovered: Option<[u8; 24]> = {
         let rows = app.visible_rows();
         rows.get(app.selected).and_then(|r| {
-            if let VisibleRow::Entry(li) = r {
-                if let crate::cron::CrontabLine::Entry(e) = &app.lines[*li] {
-                    if e.enabled {
-                        return Some(e.schedule.firings_per_hour());
-                    }
-                }
+            if let VisibleRow::Entry(li) = r
+                && let crate::cron::CrontabLine::Entry(e) = &app.lines[*li]
+                && e.enabled
+            {
+                return Some(e.schedule.firings_per_hour());
             }
             None
         })

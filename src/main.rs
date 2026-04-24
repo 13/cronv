@@ -118,10 +118,8 @@ fn event_loop(term: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) 
     loop {
         term.draw(|f| ui::render(f, app))?;
         match event::read()? {
-            Event::Key(key) => {
-                if app.handle_key(key)? {
-                    break;
-                }
+            Event::Key(key) if app.handle_key(key)? => {
+                break;
             }
             Event::Mouse(mouse) => {
                 if app.is_modal_open() {
