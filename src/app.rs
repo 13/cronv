@@ -527,7 +527,12 @@ impl App {
                 VisibleRow::Comment(li) => {
                     let li = *li;
                     if let CrontabLine::Comment(s) = &self.lines[li] {
-                        let text = s.trim_start_matches('#').trim().to_string();
+                        // Preserve tab/spacing in comment text; only strip leading '# ' marker.
+                        let text = s
+                            .strip_prefix('#')
+                            .map(|rest| rest.strip_prefix(' ').unwrap_or(rest))
+                            .unwrap_or(s)
+                            .to_string();
                         self.comment_input = Some((TextInput::new(text), CommentTarget::Edit(li)));
                         self.mode = AppMode::EditComment;
                     }

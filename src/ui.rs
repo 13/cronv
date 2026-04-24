@@ -122,15 +122,14 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
 
             match row {
                 VisibleRow::Comment(li) => {
-                    let text = if let crate::cron::CrontabLine::Comment(s) = &app.lines[*li] {
-                        s.trim_start_matches('#').trim().to_string()
+                    let line = if let crate::cron::CrontabLine::Comment(s) = &app.lines[*li] {
+                        if s.is_empty() {
+                            "#".to_string()
+                        } else {
+                            s.clone()
+                        }
                     } else {
                         String::new()
-                    };
-                    let line = if text.is_empty() {
-                        "#".to_string()
-                    } else {
-                        format!("# {}", text)
                     };
                     comment_overlays.push((idx, line, is_sel));
                     Row::new(vec![
