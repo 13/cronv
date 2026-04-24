@@ -11,18 +11,18 @@ use crate::cron::FIELD_HELP;
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
-const C_ACCENT:  Color = Color::Cyan;
-const C_GOLD:    Color = Color::Yellow;
-const C_GREEN:   Color = Color::Green;
-const C_MUTED:   Color = Color::DarkGray;
-const C_ERROR:   Color = Color::Red;
-const C_NEXT:    Color = Color::Rgb(100, 210, 180);
-const C_SEL_BG:  Color = Color::Rgb(30, 50, 65);
-const C_CMT:     Color = Color::Rgb(130, 130, 170);
-const C_DIM:     Color = Color::Rgb(55, 55, 75);
-const C_HOV:     Color = Color::Rgb(255, 200, 80);  // hovered-job highlight on timeline
-const C_BAR_LOW: Color = Color::Rgb(30, 140, 130);
-const C_BAR_MED: Color = Color::Rgb(60, 185, 165);
+const C_ACCENT:  Color = Color::Rgb(137, 180, 250); // blue
+const C_GOLD:    Color = Color::Rgb(249, 226, 175); // yellow
+const C_GREEN:   Color = Color::Rgb(166, 227, 161); // green
+const C_MUTED:   Color = Color::Rgb(127, 132, 156); // overlay1
+const C_ERROR:   Color = Color::Rgb(243, 139, 168); // red
+const C_NEXT:    Color = Color::Rgb(148, 226, 213); // teal
+const C_SEL_BG:  Color = Color::Rgb(49, 50, 68);    // surface0
+const C_CMT:     Color = Color::Rgb(166, 173, 200); // subtext1
+const C_DIM:     Color = Color::Rgb(69, 71, 90);    // surface1
+const C_HOV:     Color = Color::Rgb(250, 179, 135); // peach
+const C_BAR_LOW: Color = Color::Rgb(94, 129, 172);  // soft blue variant
+const C_BAR_MED: Color = Color::Rgb(137, 220, 235); // sky
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 
@@ -76,11 +76,11 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let header = Row::new(vec![
-        Cell::from(" ").style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
-        Cell::from("Schedule").style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
-        Cell::from("Description").style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
-        Cell::from("Next Run").style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
-        Cell::from("Command / Comment").style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
+        Cell::from(" ").style(Style::default().fg(C_GOLD).add_modifier(Modifier::BOLD)),
+        Cell::from("Schedule").style(Style::default().fg(C_GOLD).add_modifier(Modifier::BOLD)),
+        Cell::from("Description").style(Style::default().fg(C_GOLD).add_modifier(Modifier::BOLD)),
+        Cell::from("Next Run").style(Style::default().fg(C_GOLD).add_modifier(Modifier::BOLD)),
+        Cell::from("Command").style(Style::default().fg(C_GOLD).add_modifier(Modifier::BOLD)),
     ]).bottom_margin(1);
 
     let sel  = app.selected;
