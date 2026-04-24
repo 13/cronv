@@ -128,7 +128,7 @@ fn describe_standard(
 
     // First-weekday-of-month: dom=1-7 AND single weekday
     let first_wd: Option<&'static str> = if weekday != "*" && day != "*" {
-        if let (Some(ref dv), Some(ref wv)) = (&doms, &dows) {
+        if let (Some(dv), Some(wv)) = (&doms, &dows) {
             if wv.len() == 1 && *dv == vec![1u8,2,3,4,5,6,7] {
                 Some(WD_SINGULAR[wv[0] as usize])
             } else { None }
