@@ -30,18 +30,16 @@ pub fn render(f: &mut Frame, app: &mut App) {
     app.clear_mouse_regions();
     let root = f.area();
     let chunks = Layout::vertical([
-        Constraint::Length(3),  // header
         Constraint::Min(0),     // table
         Constraint::Length(6),  // aggregate timeline — always visible
         Constraint::Length(4),  // footer
     ]).split(root);
 
-    render_header(f, chunks[0], app);
-    render_table(f, app, chunks[1]);
+    render_table(f, app, chunks[0]);
     // Store table geometry for mouse hit-testing (3=border+header+blank)
-    app.table_top_row = chunks[1].y + 1 + 2; // border + "Schedule|..." header + blank margin
-    render_aggregate_timeline(f, app, chunks[2]);
-    render_footer(f, app, chunks[3]);
+    app.table_top_row = chunks[0].y + 1 + 2; // border + "Schedule|..." header + blank margin
+    render_aggregate_timeline(f, app, chunks[1]);
+    render_footer(f, app, chunks[2]);
 
     match &app.mode {
         AppMode::EditEntry     => render_edit_modal(f, app, root),
@@ -55,55 +53,6 @@ pub fn render(f: &mut Frame, app: &mut App) {
         AppMode::Help          => render_help(f, app, root),
         AppMode::Normal        => {}
     }
-}
-
-// ── Header ────────────────────────────────────────────────────────────────────
-
-fn render_header(f: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(C_ACCENT));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    if inner.width == 0 || inner.height == 0 {
-        return;
-    }
-
-    let source = truncate_middle(&app.source_label(), inner.width.saturating_sub(20) as usize);
-    let left = Line::from(vec![
-        Span::styled(" cronv ", Style::default().fg(Color::Black).bg(C_ACCENT).add_modifier(Modifier::BOLD)),
-        Span::raw("  "),
-        Span::styled(
-            format!("{} job{}", app.entry_count(), if app.entry_count() == 1 { "" } else { "s" }),
-            Style::default().fg(C_GOLD).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  •  ", Style::default().fg(C_DIM)),
-        Span::styled(source, Style::default().fg(Color::Gray)),
-    ]);
-
-    let right = if app.dirty {
-        Line::from(vec![
-            Span::styled(
-                format!(" {} ", if app.use_24h { "24h" } else { "12h" }),
-                Style::default().fg(C_NEXT),
-            ),
-            Span::styled("  ", Style::default()),
-            Span::styled(" unsaved ", Style::default().fg(Color::Black).bg(C_GOLD).add_modifier(Modifier::BOLD)),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled(
-                format!(" {} ", if app.use_24h { "24h" } else { "12h" }),
-                Style::default().fg(C_NEXT),
-            ),
-            Span::styled("  ready ", Style::default().fg(C_MUTED)),
-        ])
-    };
-
-    let cols = Layout::horizontal([Constraint::Min(10), Constraint::Length(20)]).split(inner);
-    f.render_widget(Paragraph::new(left), cols[0]);
-    f.render_widget(Paragraph::new(right).alignment(Alignment::Right), cols[1]);
 }
 
 // ── Main table ────────────────────────────────────────────────────────────────
@@ -160,7 +109,7 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
                 let e = if let crate::cron::CrontabLine::Entry(e) = &app.lines[*li] { e } else { return Row::new(vec![Cell::from("")]); };
                 let off = !e.enabled;
                 let dot = if e.enabled { Span::styled("●", Style::default().fg(C_GREEN).bg(bg)) }
-                          else         { Span::styled("○", Style::default().fg(C_MUTED).bg(bg)) };
+                          else         { Span::styled("○", Style::default().fg(Color::White).bg(bg)) };
                 let next_s = if e.enabled { e.schedule.next_run(u24).unwrap_or_else(|| "—".into()) }
                              else { "disabled".into() };
                 let (sf, df, nf, tf) = if off { (C_MUTED,C_MUTED,C_MUTED,C_MUTED) }
@@ -180,16 +129,43 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
         Constraint::Length(3), Constraint::Length(18), Constraint::Length(32),
         Constraint::Length(22), Constraint::Min(10),
     ];
+    let source = truncate_middle(&app.source_label(), area.width.saturating_sub(44) as usize);
+    let left_title = format!(
+        " {}  ·  {} job{} ",
+        source,
+        app.entry_count(),
+        if app.entry_count() == 1 { "" } else { "s" }
+    );
+    let right_title = format!(
+        " {}  ·  {} ",
+        if app.use_24h { "24h" } else { "12h" },
+        if app.dirty { "unsaved" } else { "ready" }
+    );
     let mut state = TableState::default();
     state.select(Some(sel));
     f.render_stateful_widget(
         Table::new(rows, widths)
             .header(header)
-            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(C_MUTED)))
-            .highlight_symbol("▶ ")
-            .row_highlight_style(Style::default().add_modifier(Modifier::BOLD)),
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(C_MUTED))
+                    .title(left_title)
+                    .title_style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD)),
+            )
+            .highlight_symbol("")
+            .row_highlight_style(Style::default().bg(C_SEL_BG).add_modifier(Modifier::BOLD)),
         area, &mut state,
     );
+
+    if area.width > 2 {
+        let title_area = Rect::new(area.x + 1, area.y, area.width.saturating_sub(2), 1);
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(right_title, Style::default().fg(C_NEXT))))
+                .alignment(Alignment::Right),
+            title_area,
+        );
+    }
 
     // Paint comment rows over the table so they read as one full-width line.
     let inner_w = area.width.saturating_sub(2);
@@ -201,13 +177,11 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
         let row_area = Rect::new(area.x + 1, y, inner_w, 1);
         f.render_widget(Clear, row_area);
         let bg = if is_sel { C_SEL_BG } else { Color::Reset };
-        let prefix = if is_sel { "▶ " } else { "  " };
         f.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                format!("{}{}", prefix, line),
+            Paragraph::new(Line::from(line)).style(
                 Style::default().fg(C_CMT).bg(bg)
                     .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() }),
-            ))),
+            ),
             row_area,
         );
     }
@@ -330,20 +304,17 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     } else {
         " [N] [E] [R] [D] [T] [S]  [I] [C] [?] [Q]"
     };
+
+    if area.height == 0 {
+        return;
+    }
+
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(area);
+    f.render_widget(Paragraph::new(status).alignment(Alignment::Left), rows[0]);
     f.render_widget(
-        Paragraph::new(vec![
-            status,
-            Line::from(Span::styled(hints, Style::default().fg(C_MUTED))),
-        ])
-        .alignment(Alignment::Left)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(C_MUTED))
-                .title(" Controls ")
-                .title_style(Style::default().fg(C_MUTED)),
-        ),
-        area,
+        Paragraph::new(Line::from(Span::styled(hints, Style::default().fg(Color::Blue))))
+            .alignment(Alignment::Center),
+        rows[1],
     );
 }
 
