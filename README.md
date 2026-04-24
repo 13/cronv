@@ -6,14 +6,14 @@ schedule descriptions, next-run times, a 24-hour firing timeline, and a live pre
 ```
   cronv  ·  12 jobs  ·  system crontab  [24h]
 
- ● │ Schedule        │ Description                          │ Next Run              │ Command
-───┼─────────────────┼──────────────────────────────────────┼───────────────────────┼────────────────────
-▶● │ */15 * * * *    │ Every 15 minutes                     │ 09:15 (in 13m)        │ run-parts /etc/...
- ● │ 0 2 * * *       │ Daily at 02:00                       │ Tue 02:00 (in 5h)     │ run-parts /etc/...
- ● │ 0 3 * * 6       │ Saturdays at 03:00                   │ Sat 03:00 (in 4 days) │ run-parts /etc/...
- ● │ 0 4 * * 0,3     │ Sundays and Wednesdays at 04:00      │ Wed 04:00 (in 1 day)  │ /usr/bin/pihole…
- ● │ 5 4 1-7 * 0     │ First Sunday of the month at 04:05   │ Sun 04:05 (in 5 days) │ /usr/bin/apt up…
- ○ │ */5 * * * *     │ Every 5 minutes                      │ disabled              │ curl -s https://…
+ Schedule        │ Description                          │ Next Run              │ Command
+─────────────────┼──────────────────────────────────────┼───────────────────────┼────────────────────
+ */15 * * * *    │ Every 15 minutes                     │ 09:15 (in 13m)        │ run-parts /etc/...
+ 0 2 * * *       │ Daily at 02:00                       │ Tue 02:00 (in 5h)     │ run-parts /etc/...
+ 0 3 * * 6       │ Saturdays at 03:00                   │ Sat 03:00 (in 4 days) │ run-parts /etc/...
+ 0 4 * * 0,3     │ Sundays and Wednesdays at 04:00      │ Wed 04:00 (in 1 day)  │ /usr/bin/pihole…
+ 5 4 1-7 * 0     │ First Sunday of the month at 04:05   │ Sun 04:05 (in 5 days) │ /usr/bin/apt up…
+ */5 * * * *     │ Every 5 minutes                      │ disabled              │ curl -s https://…
 ```
 
 ## Installation
@@ -125,20 +125,3 @@ cronv -f ~/my-jobs.cron      # Edit any file as a crontab
 | `@weekly` | `0 0 * * 0` | Sundays at midnight |
 | `@monthly` | `0 0 1 * *` | 1st of month at midnight |
 | `@yearly` / `@annually` | `0 0 1 1 *` | Jan 1 at midnight |
-
-## Description examples
-
-| Schedule | Description |
-|---|---|
-| `*/15 * * * *` | Every 15 minutes |
-| `0 * * * *` | Every hour |
-| `0 9 * * 1-5` | Weekdays at 09:00 |
-| `30 2 * * 5` | Fridays at 02:30 |
-| `0 4 * * 0,3` | Sundays and Wednesdays at 04:00 |
-| `5 4 1-7 * 0` | First Sunday of the month at 04:05 |
-| `0 4,5 * * *` | Daily at 04:00 and 05:00 |
-| `*/5 9,12 1 2-4 *` | Every 5 minutes from 09:00 to 09:55 and 12:00 to 12:55, on the 1st in February through April |
-
-## License
-
-MIT
