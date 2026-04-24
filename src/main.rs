@@ -5,24 +5,26 @@ mod ui;
 use anyhow::Result;
 use app::{App, CrontabSource, StatusKind};
 use crossterm::{
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event,
-        MouseButton, MouseEventKind,
-    },
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, MouseButton, MouseEventKind},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
-use std::{io, path::PathBuf, process::Command, time::{SystemTime, UNIX_EPOCH}};
+use ratatui::{Terminal, backend::CrosstermBackend};
+use std::{
+    io,
+    path::PathBuf,
+    process::Command,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const NAME:    &str = env!("CARGO_PKG_NAME");
+const NAME: &str = env!("CARGO_PKG_NAME");
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
 fn print_help() {
     println!(
-"Usage: {NAME} [OPTIONS]
+        "Usage: {NAME} [OPTIONS]
 
 A modern terminal UI for managing cron jobs.
 
@@ -42,8 +44,8 @@ Examples:
 fn parse_args() -> Result<CrontabSource, String> {
     let mut args = std::env::args().skip(1);
     let arg = match args.next() {
-        None      => return Ok(CrontabSource::System),
-        Some(a)   => a,
+        None => return Ok(CrontabSource::System),
+        Some(a) => a,
     };
     match arg.as_str() {
         "-h" | "--help" => {
@@ -66,10 +68,11 @@ fn parse_args() -> Result<CrontabSource, String> {
                 Ok(CrontabSource::File(PathBuf::from(path)))
             }
         }
-        a if a.len() > 2 && a.starts_with("-f") => {
-            Ok(CrontabSource::File(PathBuf::from(&a[2..])))
-        }
-        _ => Err(format!("Unknown option: {}\nRun '{} --help' for usage.", arg, NAME)),
+        a if a.len() > 2 && a.starts_with("-f") => Ok(CrontabSource::File(PathBuf::from(&a[2..]))),
+        _ => Err(format!(
+            "Unknown option: {}\nRun '{} --help' for usage.",
+            arg, NAME
+        )),
     }
 }
 
@@ -96,26 +99,29 @@ fn run_tui(app: &mut App) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend  = CrosstermBackend::new(stdout);
+    let backend = CrosstermBackend::new(stdout);
     let mut term = Terminal::new(backend)?;
 
     let result = event_loop(&mut term, app);
 
     disable_raw_mode()?;
-    execute!(term.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        term.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     term.show_cursor()?;
     result
 }
 
-fn event_loop(
-    term: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app:  &mut App,
-) -> Result<()> {
+fn event_loop(term: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> Result<()> {
     loop {
         term.draw(|f| ui::render(f, app))?;
         match event::read()? {
             Event::Key(key) => {
-                if app.handle_key(key)? { break; }
+                if app.handle_key(key)? {
+                    break;
+                }
             }
             Event::Mouse(mouse) => {
                 if app.is_modal_open() {
@@ -129,8 +135,12 @@ fn event_loop(
                             app.handle_mouse_click(mouse.row, mouse.column);
                         }
                         // Scroll wheel — navigate list
-                        MouseEventKind::ScrollUp   => { app.move_up(); }
-                        MouseEventKind::ScrollDown => { app.move_down(); }
+                        MouseEventKind::ScrollUp => {
+                            app.move_up();
+                        }
+                        MouseEventKind::ScrollDown => {
+                            app.move_down();
+                        }
                         _ => {}
                     }
                 }
@@ -153,7 +163,10 @@ fn launch_external_raw_editor(
     let tmp = std::env::temp_dir().join(format!(
         "cronv-{}-{}.cron",
         std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
     ));
     std::fs::write(&tmp, content)?;
 
@@ -164,7 +177,10 @@ fn launch_external_raw_editor(
     match edit_result {
         Ok(()) => match std::fs::read_to_string(&tmp) {
             Ok(edited) => app.apply_raw_content(&edited),
-            Err(e) => app.notify_status(format!("Failed to read edited content: {}", e), StatusKind::Error),
+            Err(e) => app.notify_status(
+                format!("Failed to read edited content: {}", e),
+                StatusKind::Error,
+            ),
         },
         Err(e) => app.notify_status(format!("Raw editor failed: {}", e), StatusKind::Error),
     }
@@ -175,7 +191,11 @@ fn launch_external_raw_editor(
 
 fn suspend_tui(term: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     disable_raw_mode()?;
-    execute!(term.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        term.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     term.show_cursor()?;
     Ok(())
 }
@@ -191,7 +211,11 @@ fn run_editor_on_file(path: &std::path::Path) -> Result<()> {
     let editor = std::env::var("VISUAL")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| std::env::var("EDITOR").ok().filter(|s| !s.trim().is_empty()))
+        .or_else(|| {
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
         .unwrap_or_else(|| "vi".to_string());
     let quoted_path = shell_quote(path.to_string_lossy().as_ref());
     let command = format!("{} {}", editor, quoted_path);
@@ -214,37 +238,83 @@ mod tests {
     fn next_after(sched: &CronSchedule, from_str: &str) -> String {
         let from = NaiveDateTime::parse_from_str(from_str, "%Y-%m-%d %H:%M").unwrap();
         match sched {
-            CronSchedule::Standard { minute, hour, day, month, weekday } =>
-                crate::cron::next_standard(minute, hour, day, month, weekday, from)
-                    .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
-                    .unwrap_or_else(|| "None".into()),
-            _ => "special".into()
+            CronSchedule::Standard {
+                minute,
+                hour,
+                day,
+                month,
+                weekday,
+            } => crate::cron::next_standard(minute, hour, day, month, weekday, from)
+                .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| "None".into()),
+            _ => "special".into(),
         }
     }
 
     fn sched(s: &str) -> CronSchedule {
         let mut p = s.split_whitespace();
         CronSchedule::Standard {
-            minute:  p.next().unwrap().into(), hour:    p.next().unwrap().into(),
-            day:     p.next().unwrap().into(), month:   p.next().unwrap().into(),
+            minute: p.next().unwrap().into(),
+            hour: p.next().unwrap().into(),
+            day: p.next().unwrap().into(),
+            month: p.next().unwrap().into(),
             weekday: p.next().unwrap().into(),
         }
     }
 
     #[test]
     fn next_runs() {
-        assert_eq!(next_after(&sched("*/15 * * * *"), "2025-04-22 09:08"), "2025-04-22 09:15");
-        assert_eq!(next_after(&sched("*/15 * * * *"), "2025-04-22 09:15"), "2025-04-22 09:30");
-        assert_eq!(next_after(&sched("0 * * * *"),    "2025-04-22 09:00"), "2025-04-22 10:00");
-        assert_eq!(next_after(&sched("0 2 * * *"),    "2025-04-22 09:00"), "2025-04-23 02:00");
-        assert_eq!(next_after(&sched("30 2 * * 5"),   "2025-04-22 09:00"), "2025-04-25 02:30");
-        assert_eq!(next_after(&sched("30 3 1 * *"),   "2025-04-22 09:00"), "2025-05-01 03:30");
-        assert_eq!(next_after(&sched("0 4,5 * * *"),  "2025-04-22 03:30"), "2025-04-22 04:00");
-        assert_eq!(next_after(&sched("0 4,5 * * *"),  "2025-04-22 04:30"), "2025-04-22 05:00");
-        assert_eq!(next_after(&sched("0 4,5 * * *"),  "2025-04-22 05:30"), "2025-04-23 04:00");
-        assert_eq!(next_after(&sched("0 4 * * 0,3"),  "2025-04-22 09:00"), "2025-04-23 04:00");
-        assert_eq!(next_after(&sched("*/5 9,12 1 2-4 *"), "2025-01-31 00:00"), "2025-02-01 09:00");
-        assert_eq!(next_after(&sched("*/5 9,12 1 2-4 *"), "2025-02-01 09:03"), "2025-02-01 09:05");
-        assert_eq!(next_after(&sched("*/5 9,12 1 2-4 *"), "2025-02-01 09:55"), "2025-02-01 12:00");
+        assert_eq!(
+            next_after(&sched("*/15 * * * *"), "2025-04-22 09:08"),
+            "2025-04-22 09:15"
+        );
+        assert_eq!(
+            next_after(&sched("*/15 * * * *"), "2025-04-22 09:15"),
+            "2025-04-22 09:30"
+        );
+        assert_eq!(
+            next_after(&sched("0 * * * *"), "2025-04-22 09:00"),
+            "2025-04-22 10:00"
+        );
+        assert_eq!(
+            next_after(&sched("0 2 * * *"), "2025-04-22 09:00"),
+            "2025-04-23 02:00"
+        );
+        assert_eq!(
+            next_after(&sched("30 2 * * 5"), "2025-04-22 09:00"),
+            "2025-04-25 02:30"
+        );
+        assert_eq!(
+            next_after(&sched("30 3 1 * *"), "2025-04-22 09:00"),
+            "2025-05-01 03:30"
+        );
+        assert_eq!(
+            next_after(&sched("0 4,5 * * *"), "2025-04-22 03:30"),
+            "2025-04-22 04:00"
+        );
+        assert_eq!(
+            next_after(&sched("0 4,5 * * *"), "2025-04-22 04:30"),
+            "2025-04-22 05:00"
+        );
+        assert_eq!(
+            next_after(&sched("0 4,5 * * *"), "2025-04-22 05:30"),
+            "2025-04-23 04:00"
+        );
+        assert_eq!(
+            next_after(&sched("0 4 * * 0,3"), "2025-04-22 09:00"),
+            "2025-04-23 04:00"
+        );
+        assert_eq!(
+            next_after(&sched("*/5 9,12 1 2-4 *"), "2025-01-31 00:00"),
+            "2025-02-01 09:00"
+        );
+        assert_eq!(
+            next_after(&sched("*/5 9,12 1 2-4 *"), "2025-02-01 09:03"),
+            "2025-02-01 09:05"
+        );
+        assert_eq!(
+            next_after(&sched("*/5 9,12 1 2-4 *"), "2025-02-01 09:55"),
+            "2025-02-01 12:00"
+        );
     }
 }
