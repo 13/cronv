@@ -243,12 +243,7 @@ fn describe_standard(
                 wd,
                 m
             ),
-            (Some(t), None) => format!(
-                "{} on {} and on {}",
-                describe_when_prefix(t),
-                dom,
-                wd
-            ),
+            (Some(t), None) => format!("{} on {} and on {}", describe_when_prefix(t), dom, wd),
             (None, Some(m)) => format!("On {} and on {} in {}", dom, wd, m),
             (None, None) => format!("On {} and on {}", dom, wd),
         };
@@ -1002,4 +997,3 @@ mod tests {
         );
     }
 }
-
