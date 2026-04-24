@@ -158,6 +158,10 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
         area, &mut state,
     );
 
+    // Keep comment overlays in sync with table scrolling on small screens.
+    let scroll = state.offset();
+    let visible_body_rows = area.height.saturating_sub(4) as usize;
+
     if area.width > 2 {
         let title_area = Rect::new(area.x + 1, area.y, area.width.saturating_sub(2), 1);
         f.render_widget(
@@ -170,7 +174,10 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
     // Paint comment rows over the table so they read as one full-width line.
     let inner_w = area.width.saturating_sub(2);
     for (idx, line, is_sel) in comment_overlays {
-        let y = area.y + 1 + 2 + idx as u16; // top border + header + header margin + row index
+        if visible_body_rows == 0 || idx < scroll || idx >= scroll + visible_body_rows {
+            continue;
+        }
+        let y = area.y + 1 + 2 + (idx - scroll) as u16; // top border + header + margin + viewport row
         if y >= area.y + area.height.saturating_sub(1) {
             continue;
         }
