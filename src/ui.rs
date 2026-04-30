@@ -26,6 +26,40 @@ const C_HOV: Color = Color::Rgb(250, 179, 135); // peach
 const C_BAR_LOW: Color = Color::Rgb(94, 129, 172); // soft blue variant
 const C_BAR_MED: Color = Color::Rgb(137, 220, 235); // sky
 
+// ── Tab helpers ───────────────────────────────────────────────────────────────
+
+/// Expand tab characters to 8-column tabstops (POSIX / crontab convention).
+fn expand_tabs(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut col = 0usize;
+    for c in s.chars() {
+        if c == '\t' {
+            let spaces = 8 - (col % 8);
+            for _ in 0..spaces {
+                out.push(' ');
+            }
+            col += spaces;
+        } else {
+            out.push(c);
+            col += 1;
+        }
+    }
+    out
+}
+
+/// Return the visual column of `byte_pos` in `s`, expanding tabs at 8-wide stops.
+fn visual_col(s: &str, byte_pos: usize) -> usize {
+    let mut col = 0usize;
+    for c in s[..byte_pos].chars() {
+        if c == '\t' {
+            col = (col / 8 + 1) * 8;
+        } else {
+            col += 1;
+        }
+    }
+    col
+}
+
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 pub fn render(f: &mut Frame, app: &mut App) {
@@ -246,14 +280,15 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
         let row_area = Rect::new(area.x + 1, y, inner_w, 1);
         f.render_widget(Clear, row_area);
         let bg = if is_sel { C_SEL_BG } else { Color::Reset };
+        // FIX: expand tabs so \t characters display correctly in the table view
         f.render_widget(
-            Paragraph::new(Line::from(line)).style(Style::default().fg(C_CMT).bg(bg).add_modifier(
-                if is_sel {
+            Paragraph::new(Line::from(expand_tabs(&line))).style(
+                Style::default().fg(C_CMT).bg(bg).add_modifier(if is_sel {
                     Modifier::BOLD
                 } else {
                     Modifier::empty()
-                },
-            )),
+                }),
+            ),
             row_area,
         );
     }
@@ -472,10 +507,13 @@ fn render_comment_modal(f: &mut Frame, app: &mut App, area: Rect) {
     .split(inner);
     app.set_comment_input_bounds(to_ui_rect(rows[0]));
 
+    // FIX: expand tabs for display so \t characters render correctly
+    let display_value = expand_tabs(&input.value);
+
     // Text field
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            &input.value,
+            display_value,
             Style::default().fg(Color::White),
         )))
         .block(
@@ -488,8 +526,9 @@ fn render_comment_modal(f: &mut Frame, app: &mut App, area: Rect) {
         rows[0],
     );
 
-    // Cursor
-    let cx = rows[0].x + 1 + input.cursor as u16;
+    // FIX: use visual_col so the cursor lands at the correct terminal column
+    // even when tabs precede it (each \t may occupy up to 8 columns).
+    let cx = rows[0].x + 1 + visual_col(&input.value, input.cursor) as u16;
     let cy = rows[0].y + 1;
     if cx < rows[0].x + rows[0].width.saturating_sub(1) {
         f.set_cursor_position((cx, cy));
