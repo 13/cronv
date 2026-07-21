@@ -35,7 +35,7 @@ esac
 
 # Select file
 if [ "$OS" = "linux" ]; then
-  FILE="cronv-linux-x86_64-musl.tar.gz"
+  FILE="cronv-linux-${ARCH}-musl.tar.gz"
 else
   FILE="cronv-macos-${ARCH}.tar.gz"
 fi

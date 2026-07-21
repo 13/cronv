@@ -24,27 +24,20 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: Build
-        run: cargo build --release
+        run: cargo build --release --locked
 
       - name: Test
-        run: cargo test
+        run: cargo test --locked
 
   musl:
     name: Build (Linux musl / Alpine)
@@ -61,19 +54,29 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Cache
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: musl-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: musl
 
       - name: Build (musl)
-        run: cargo build --release --target x86_64-unknown-linux-musl
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
 
       - name: Upload musl binary
         uses: actions/upload-artifact@v4
         with:
           name: cronv-linux-musl
           path: target/x86_64-unknown-linux-musl/release/cronv
+
+  audit:
+    name: Security audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit dependencies
+        run: cargo audit

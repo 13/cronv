@@ -31,6 +31,12 @@ jobs:
             archive: cronv-linux-x86_64-musl.tar.gz
             musl: true
 
+          # Linux — ARM64 musl (static, built with cross)
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-latest
+            archive: cronv-linux-aarch64-musl.tar.gz
+            cross: true
+
           # macOS — Intel
           - target: x86_64-apple-darwin
             runner: macos-latest
@@ -53,17 +59,19 @@ jobs:
         if: matrix.musl
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      - name: Cache
-        uses: actions/cache@v4
+      - name: Install cross
+        if: matrix.cross
+        uses: taiki-e/install-action@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          tool: cross
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: ${{ matrix.cross && 'cross' || 'cargo' }} build --release --locked --target ${{ matrix.target }}
 
       - name: Package
         shell: bash

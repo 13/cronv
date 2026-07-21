@@ -86,14 +86,34 @@ impl CronSchedule {
                 _ => {}
             },
             CronSchedule::Standard { minute, hour, .. } => {
-                let mins = expand(minute, 0, 59).unwrap_or_default();
-                let hrs = expand(hour, 0, 23).unwrap_or_default();
+                let mins = expand(minute, 0, 59, &[]).unwrap_or_default();
+                let hrs = expand(hour, 0, 23, &[]).unwrap_or_default();
                 for h in hrs {
                     counts[h as usize] = mins.len() as u8;
                 }
             }
         }
         counts
+    }
+
+    /// True when every field parses (and, for @specials, the keyword is known).
+    pub fn is_valid(&self) -> bool {
+        match self {
+            CronSchedule::Special(s) => SPECIALS.iter().any(|e| e.keyword.eq_ignore_ascii_case(s)),
+            CronSchedule::Standard {
+                minute,
+                hour,
+                day,
+                month,
+                weekday,
+            } => {
+                field_valid(minute, 0, 59, &[])
+                    && field_valid(hour, 0, 23, &[])
+                    && field_valid(day, 1, 31, &[])
+                    && field_valid(month, 1, 12, &MONTH_ABBREV)
+                    && field_valid(weekday, 0, 6, &WD_ABBREV)
+            }
+        }
     }
 
     fn next_after(&self, from: NaiveDateTime) -> Option<NaiveDateTime> {
@@ -141,11 +161,11 @@ fn describe_standard(
         return "Every minute".into();
     }
 
-    let mins = match expand(minute, 0, 59) {
+    let mins = match expand(minute, 0, 59, &[]) {
         Some(v) => v,
         None => return "Invalid schedule".into(),
     };
-    let hrs = match expand(hour, 0, 23) {
+    let hrs = match expand(hour, 0, 23, &[]) {
         Some(v) => v,
         None => return "Invalid schedule".into(),
     };
@@ -173,26 +193,6 @@ fn describe_standard(
 
     let time = build_time_component(minute, hour, &mins, &hrs, use_24h);
 
-    // ── Day / weekday component ───────────────────────────────────────────────
-
-    let doms = expand(day, 1, 31);
-    let dows = expand(weekday, 0, 6);
-
-    // First-weekday-of-month: dom=1-7 AND single weekday
-    let first_wd: Option<&'static str> = if weekday != "*" && day != "*" {
-        if let (Some(dv), Some(wv)) = (&doms, &dows) {
-            if wv.len() == 1 && *dv == vec![1u8, 2, 3, 4, 5, 6, 7] {
-                Some(WD_SINGULAR[wv[0] as usize])
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
     // ── Month component ───────────────────────────────────────────────────────
 
     let mon_desc: Option<String> = if month == "*" {
@@ -202,15 +202,6 @@ fn describe_standard(
     };
 
     // ── Assemble ──────────────────────────────────────────────────────────────
-
-    if let Some(wname) = first_wd {
-        return match (&time, &mon_desc) {
-            (Some(t), Some(m)) => format!("First {} of {} at {}", wname, m, t),
-            (Some(t), None) => format!("First {} of the month at {}", wname, t),
-            (None, Some(m)) => format!("First {} of {}", wname, m),
-            (None, None) => format!("First {} of the month", wname),
-        };
-    }
 
     if weekday != "*" && day == "*" {
         let wd = describe_weekdays(weekday);
@@ -233,19 +224,21 @@ fn describe_standard(
     }
 
     if day != "*" && weekday != "*" {
+        // Vixie cron: when both day-of-month and weekday are restricted,
+        // the job fires when EITHER matches.
         let dom = describe_dom(day);
         let wd = describe_weekday_on(weekday);
         return match (&time, &mon_desc) {
             (Some(t), Some(m)) => format!(
-                "{} on {} and on {} in {}",
+                "{} on {} or on {} in {}",
                 describe_when_prefix(t),
                 dom,
                 wd,
                 m
             ),
-            (Some(t), None) => format!("{} on {} and on {}", describe_when_prefix(t), dom, wd),
-            (None, Some(m)) => format!("On {} and on {} in {}", dom, wd, m),
-            (None, None) => format!("On {} and on {}", dom, wd),
+            (Some(t), None) => format!("{} on {} or on {}", describe_when_prefix(t), dom, wd),
+            (None, Some(m)) => format!("On {} or on {} in {}", dom, wd, m),
+            (None, None) => format!("On {} or on {}", dom, wd),
         };
     }
 
@@ -371,7 +364,7 @@ fn describe_month_expr(s: &str) -> Option<String> {
             Some(format!("every {} month", ordinal(n)))
         };
     }
-    expand(s, 1, 12).map(|mv| describe_months(&mv))
+    expand(s, 1, 12, &MONTH_ABBREV).map(|mv| describe_months(&mv))
 }
 
 // ── Weekday description ───────────────────────────────────────────────────────
@@ -395,6 +388,9 @@ const WD_SINGULAR: [&str; 7] = [
     "Saturday",
 ];
 const WD_ABBREV: [&str; 7] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const MONTH_ABBREV: [&str; 12] = [
+    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+];
 
 fn describe_weekdays(s: &str) -> String {
     // Range
@@ -475,8 +471,17 @@ fn describe_dom(s: &str) -> String {
     {
         return format!("days {} to {}", a, b);
     }
-    if s == "L" {
-        return "the last day".into();
+    if s.contains(',')
+        && let Some(nums) = s
+            .split(',')
+            .map(|p| p.trim().parse::<u32>().ok())
+            .collect::<Option<Vec<_>>>()
+    {
+        let strs: Vec<String> = nums
+            .iter()
+            .map(|&n| format!("the {}", ordinal(n)))
+            .collect();
+        return join_and(&strs);
     }
     s.into()
 }
@@ -626,11 +631,11 @@ pub(crate) fn next_standard(
     dow_s: &str,
     now: NaiveDateTime,
 ) -> Option<NaiveDateTime> {
-    let minutes = expand(min_s, 0, 59)?;
-    let hours = expand(hr_s, 0, 23)?;
-    let doms = expand(dom_s, 1, 31)?;
-    let months = expand(mon_s, 1, 12)?;
-    let dows = expand(dow_s, 0, 6)?;
+    let minutes = expand(min_s, 0, 59, &[])?;
+    let hours = expand(hr_s, 0, 23, &[])?;
+    let doms = expand(dom_s, 1, 31, &[])?;
+    let months = expand(mon_s, 1, 12, &MONTH_ABBREV)?;
+    let dows = expand(dow_s, 0, 6, &WD_ABBREV)?;
     let dom_star = dom_s == "*";
     let dow_star = dow_s == "*";
 
@@ -646,6 +651,7 @@ pub(crate) fn next_standard(
 
         let dom = t.day() as u8;
         let dow = t.weekday().num_days_from_sunday() as u8;
+        // Vixie cron: when both dom and dow are restricted, either match fires.
         let day_ok = if dom_star && dow_star {
             true
         } else if dom_star {
@@ -653,7 +659,7 @@ pub(crate) fn next_standard(
         } else if dow_star {
             doms.contains(&dom)
         } else {
-            doms.contains(&dom) && dows.contains(&dow)
+            doms.contains(&dom) || dows.contains(&dow)
         };
         if !day_ok {
             t = (t + Duration::days(1))
@@ -704,7 +710,18 @@ fn advance_to_month(t: NaiveDateTime, months: &[u8]) -> Option<NaiveDateTime> {
 
 // ── Field expansion ───────────────────────────────────────────────────────────
 
-pub fn expand(expr: &str, lo: u8, hi: u8) -> Option<Vec<u8>> {
+/// Parse a single field atom: a number or a name from `names` (e.g. "mon", "jan").
+/// Numeric 7 is aliased to 0 (Sunday) when the field range is 0–6.
+fn parse_atom(s: &str, lo: u8, hi: u8, names: &[&str]) -> Option<u8> {
+    if let Ok(n) = s.parse::<u8>() {
+        let n = if n == 7 && hi == 6 { 0 } else { n };
+        return (lo..=hi).contains(&n).then_some(n);
+    }
+    let idx = names.iter().position(|&a| a.eq_ignore_ascii_case(s))?;
+    Some(lo + idx as u8)
+}
+
+pub fn expand(expr: &str, lo: u8, hi: u8, names: &[&str]) -> Option<Vec<u8>> {
     let mut set: Vec<u8> = Vec::new();
     for part in expr.split(',') {
         let part = part.trim();
@@ -732,13 +749,14 @@ pub fn expand(expr: &str, lo: u8, hi: u8) -> Option<Vec<u8>> {
             } else {
                 (rest, 1u8)
             };
-            let a: u8 = a_s.parse().ok()?;
-            let mut b: u8 = b_s.parse().ok()?;
-            // Allow weekday 7 = Sunday
-            if b == 7 && hi == 6 {
-                b = 6;
-            }
-            if a > hi || b > hi || a > b {
+            let a = parse_atom(a_s, lo, hi, names)?;
+            // Keep "5-7" usable as a weekday range end (7 = Saturday cap).
+            let b = if b_s == "7" && hi == 6 {
+                6
+            } else {
+                parse_atom(b_s, lo, hi, names)?
+            };
+            if a > b {
                 return None;
             }
             let mut v = a;
@@ -748,22 +766,15 @@ pub fn expand(expr: &str, lo: u8, hi: u8) -> Option<Vec<u8>> {
             }
             continue;
         }
-        let mut n: u8 = part.parse().ok()?;
-        if n == 7 && hi == 6 {
-            n = 0;
-        } // Sunday alias
-        if n < lo || n > hi {
-            return None;
-        }
-        set.push(n);
+        set.push(parse_atom(part, lo, hi, names)?);
     }
     set.sort_unstable();
     set.dedup();
     if set.is_empty() { None } else { Some(set) }
 }
 
-fn field_valid(s: &str, lo: u8, hi: u8) -> bool {
-    expand(s, lo, hi).is_some()
+fn field_valid(s: &str, lo: u8, hi: u8, names: &[&str]) -> bool {
+    expand(s, lo, hi, names).is_some()
 }
 
 // ── Data model ────────────────────────────────────────────────────────────────
@@ -859,19 +870,19 @@ fn try_parse_entry(s: &str) -> Option<CronEntry> {
         return None;
     }
     // Strict field validation
-    if !field_valid(&min, 0, 59) {
+    if !field_valid(&min, 0, 59, &[]) {
         return None;
     }
-    if !field_valid(&hr, 0, 23) {
+    if !field_valid(&hr, 0, 23, &[]) {
         return None;
     }
-    if !field_valid(&dom, 1, 31) {
+    if !field_valid(&dom, 1, 31, &[]) {
         return None;
     }
-    if !field_valid(&mon, 1, 12) {
+    if !field_valid(&mon, 1, 12, &MONTH_ABBREV) {
         return None;
     }
-    if !field_valid(&dow, 0, 6) {
+    if !field_valid(&dow, 0, 6, &WD_ABBREV) {
         return None;
     }
     Some(CronEntry {
@@ -917,13 +928,12 @@ pub fn serialize_crontab(lines: &[CrontabLine]) -> String {
 
 // ── @special catalogue ────────────────────────────────────────────────────────
 
-#[allow(dead_code)]
 pub struct SpecialEntry {
     pub keyword: &'static str,
+    #[allow(dead_code)]
     pub desc: &'static str,
 }
 
-#[allow(dead_code)]
 pub const SPECIALS: &[SpecialEntry] = &[
     SpecialEntry {
         keyword: "@reboot",
@@ -964,8 +974,8 @@ pub const SPECIALS: &[SpecialEntry] = &[
 pub const FIELD_HELP: [(&str, &str, &str); 5] = [
     ("Minute", "0–59", "*/5  0,15,30,45  10-20  0"),
     ("Hour", "0–23", "*/2  9,17  8-18   0"),
-    ("Day", "1–31", "*/5  1,15  1-7    L (last)"),
-    ("Month", "1–12", "*/3  2-4   1,6,12"),
+    ("Day", "1–31", "*/5  1,15  1-7"),
+    ("Month", "1–12", "*/3  2-4   JAN,JUN,DEC"),
     ("Weekday", "0–7 (0/7=Sun)", "1-5  0,6  MON-FRI"),
 ];
 
@@ -973,27 +983,194 @@ pub const FIELD_HELP: [(&str, &str, &str); 5] = [
 mod tests {
     use super::*;
 
+    fn sched(s: &str) -> CronSchedule {
+        let mut p = s.split_whitespace();
+        CronSchedule::Standard {
+            minute: p.next().unwrap().into(),
+            hour: p.next().unwrap().into(),
+            day: p.next().unwrap().into(),
+            month: p.next().unwrap().into(),
+            weekday: p.next().unwrap().into(),
+        }
+    }
+
+    fn next_after(spec: &str, from_str: &str) -> String {
+        let from = NaiveDateTime::parse_from_str(from_str, "%Y-%m-%d %H:%M").unwrap();
+        match sched(spec) {
+            CronSchedule::Standard {
+                minute,
+                hour,
+                day,
+                month,
+                weekday,
+            } => next_standard(&minute, &hour, &day, &month, &weekday, from)
+                .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| "None".into()),
+            _ => "special".into(),
+        }
+    }
+
+    #[test]
+    fn next_runs() {
+        assert_eq!(
+            next_after("*/15 * * * *", "2025-04-22 09:08"),
+            "2025-04-22 09:15"
+        );
+        assert_eq!(
+            next_after("*/15 * * * *", "2025-04-22 09:15"),
+            "2025-04-22 09:30"
+        );
+        assert_eq!(
+            next_after("0 * * * *", "2025-04-22 09:00"),
+            "2025-04-22 10:00"
+        );
+        assert_eq!(
+            next_after("0 2 * * *", "2025-04-22 09:00"),
+            "2025-04-23 02:00"
+        );
+        assert_eq!(
+            next_after("30 2 * * 5", "2025-04-22 09:00"),
+            "2025-04-25 02:30"
+        );
+        assert_eq!(
+            next_after("30 3 1 * *", "2025-04-22 09:00"),
+            "2025-05-01 03:30"
+        );
+        assert_eq!(
+            next_after("0 4,5 * * *", "2025-04-22 03:30"),
+            "2025-04-22 04:00"
+        );
+        assert_eq!(
+            next_after("0 4,5 * * *", "2025-04-22 04:30"),
+            "2025-04-22 05:00"
+        );
+        assert_eq!(
+            next_after("0 4,5 * * *", "2025-04-22 05:30"),
+            "2025-04-23 04:00"
+        );
+        assert_eq!(
+            next_after("0 4 * * 0,3", "2025-04-22 09:00"),
+            "2025-04-23 04:00"
+        );
+        assert_eq!(
+            next_after("*/5 9,12 1 2-4 *", "2025-01-31 00:00"),
+            "2025-02-01 09:00"
+        );
+        assert_eq!(
+            next_after("*/5 9,12 1 2-4 *", "2025-02-01 09:03"),
+            "2025-02-01 09:05"
+        );
+        assert_eq!(
+            next_after("*/5 9,12 1 2-4 *", "2025-02-01 09:55"),
+            "2025-02-01 12:00"
+        );
+    }
+
+    #[test]
+    fn dom_dow_both_restricted_fires_on_either() {
+        // Vixie cron OR semantics: dom=1 or Monday, whichever comes first.
+        // From Tue 2025-04-22, next Monday (Apr 28) precedes May 1.
+        assert_eq!(
+            next_after("0 4 1 * 1", "2025-04-22 09:00"),
+            "2025-04-28 04:00"
+        );
+        // From Apr 29 (after that Monday? no — Apr 28 passed), May 1 (Thu) precedes next Monday May 5.
+        assert_eq!(
+            next_after("0 4 1 * 1", "2025-04-29 09:00"),
+            "2025-05-01 04:00"
+        );
+    }
+
+    #[test]
+    fn next_run_accepts_weekday_and_month_names() {
+        assert_eq!(
+            next_after("0 9 * * mon-fri", "2025-04-26 10:00"),
+            "2025-04-28 09:00"
+        );
+        assert_eq!(
+            next_after("0 0 1 jan *", "2025-04-22 09:00"),
+            "2026-01-01 00:00"
+        );
+    }
+
+    #[test]
+    fn expand_basics() {
+        assert_eq!(expand("*/15", 0, 59, &[]), Some(vec![0, 15, 30, 45]));
+        assert_eq!(expand("1-5", 0, 6, &[]), Some(vec![1, 2, 3, 4, 5]));
+        assert_eq!(expand("7", 0, 6, &[]), Some(vec![0])); // Sunday alias
+        assert_eq!(expand("5-7", 0, 6, &[]), Some(vec![5, 6]));
+        assert_eq!(expand("10-20/5", 0, 59, &[]), Some(vec![10, 15, 20]));
+        assert_eq!(expand("99", 0, 59, &[]), None);
+        assert_eq!(expand("*/0", 0, 59, &[]), None);
+        assert_eq!(expand("", 0, 59, &[]), None);
+    }
+
+    #[test]
+    fn expand_names() {
+        assert_eq!(
+            expand("MON-FRI", 0, 6, &WD_ABBREV),
+            Some(vec![1, 2, 3, 4, 5])
+        );
+        assert_eq!(expand("sun,sat", 0, 6, &WD_ABBREV), Some(vec![0, 6]));
+        assert_eq!(
+            expand("jan,jun,dec", 1, 12, &MONTH_ABBREV),
+            Some(vec![1, 6, 12])
+        );
+        assert_eq!(expand("Feb-Apr", 1, 12, &MONTH_ABBREV), Some(vec![2, 3, 4]));
+        assert_eq!(expand("mon", 0, 59, &[]), None); // names not valid for numeric fields
+    }
+
+    #[test]
+    fn parses_names_in_crontab_lines() {
+        let lines = parse_crontab("0 9 * * MON-FRI /bin/true\n");
+        assert!(matches!(&lines[0], CrontabLine::Entry(e) if e.enabled));
+    }
+
+    #[test]
+    fn parse_serialize_round_trip() {
+        let content = "SHELL=/bin/sh\n\n# backup job\n0 2 * * * /usr/local/bin/backup\n# 30 3 * * * /old/job\n";
+        assert_eq!(serialize_crontab(&parse_crontab(content)), content);
+    }
+
+    #[test]
+    fn schedule_validation() {
+        assert!(sched("0 9 * * mon-fri").is_valid());
+        assert!(!sched("99 * * * *").is_valid());
+        assert!(!sched("* * * * 8").is_valid());
+        assert!(CronSchedule::Special("@daily".into()).is_valid());
+        assert!(CronSchedule::Special("@Reboot".into()).is_valid());
+        assert!(!CronSchedule::Special("@fortnightly".into()).is_valid());
+    }
+
     #[test]
     fn describes_dom_and_weekday_with_month_step() {
         assert_eq!(
             describe_standard("0", "13", "1", "*/5", "7", true),
-            "At 13:00 on the 1st and on Sunday in every 5th month"
+            "At 13:00 on the 1st or on Sunday in every 5th month"
         );
     }
 
     #[test]
-    fn describes_dom_and_weekday_naturally_without_month_constraint() {
+    fn describes_dom_and_weekday_as_either_match() {
         assert_eq!(
             describe_standard("0", "13", "1", "*", "7", true),
-            "At 13:00 on the 1st and on Sunday"
+            "At 13:00 on the 1st or on Sunday"
+        );
+        assert_eq!(
+            describe_standard("5", "4", "1-7", "*", "0", true),
+            "At 04:05 on days 1 to 7 or on Sunday"
         );
     }
 
     #[test]
-    fn keeps_first_weekday_of_month_wording() {
+    fn describes_dom_lists_and_weekday_names() {
         assert_eq!(
-            describe_standard("5", "4", "1-7", "*", "0", true),
-            "First Sunday of the month at 04:05"
+            describe_standard("5", "4", "1,15", "*", "*", true),
+            "Monthly on the 1st and the 15th at 04:05"
+        );
+        assert_eq!(
+            describe_standard("0", "9", "*", "*", "mon-fri", true),
+            "Weekdays at 09:00"
         );
     }
 }

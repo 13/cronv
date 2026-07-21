@@ -12,7 +12,7 @@ schedule descriptions, next-run times, a 24-hour firing timeline, and a live pre
  0 2 * * *       │ Daily at 02:00                       │ Tue 02:00 (in 5h)     │ run-parts /etc/...
  0 3 * * 6       │ Saturdays at 03:00                   │ Sat 03:00 (in 4 days) │ run-parts /etc/...
  0 4 * * 0,3     │ Sundays and Wednesdays at 04:00      │ Wed 04:00 (in 1 day)  │ /usr/bin/pihole…
- 5 4 1-7 * 0     │ First Sunday of the month at 04:05   │ Sun 04:05 (in 5 days) │ /usr/bin/apt up…
+ 5 4 1-7 * 0     │ At 04:05 on days 1 to 7 or on Sunday │ Sun 04:05 (in 5 days) │ /usr/bin/apt up…
  */5 * * * *     │ Every 5 minutes                      │ disabled              │ curl -s https://…
 ```
 
@@ -31,6 +31,9 @@ Download the latest release for your platform from the
 |---|---|
 | Linux x86-64 (glibc) | `cronv-linux-x86_64.tar.gz` |
 | Linux x86-64 (musl / Alpine) | `cronv-linux-x86_64-musl.tar.gz` |
+| Linux ARM64 (musl, static) | `cronv-linux-aarch64-musl.tar.gz` |
+| macOS Intel | `cronv-macos-x86_64.tar.gz` |
+| macOS Apple Silicon | `cronv-macos-aarch64.tar.gz` |
 
 ```bash
 # Example: Linux
@@ -41,7 +44,7 @@ sudo mv cronv /usr/local/bin/
 
 ### Build from source
 
-Requires Rust 1.75+ (stable).
+Requires Rust 1.88+ (stable).
 
 ```bash
 git clone https://github.com/13/cronv
@@ -72,9 +75,13 @@ Options:
 
 ```bash
 cronv                        # Edit the current user's system crontab
-cronv --file /etc/crontab    # Edit a system-wide crontab file
-cronv -f ~/my-jobs.cron      # Edit any file as a crontab
+cronv --file ~/jobs.cron     # Edit a crontab file directly
+cronv -f ~/my-jobs.cron      # Same, short form
 ```
+
+> **Note:** system-wide crontabs that carry a *user* column (e.g. `/etc/crontab`,
+> `/etc/cron.d/*`) use a 6-field format that cronv does not parse — stick to
+> per-user crontabs or plain 5-field files.
 
 ## Key bindings
 
@@ -109,11 +116,18 @@ cronv -f ~/my-jobs.cron      # Edit any file as a crontab
 ```
 ┌───── minute       (0–59)     */5  0,15,30,45  10-20
 │ ┌─── hour         (0–23)     */2  9,17  8-18
-│ │ ┌─ day-of-month (1–31)     */5  1,15  1-7   L
-│ │ │ ┌ month       (1–12)     */3  2-4   1,6,12
+│ │ ┌─ day-of-month (1–31)     */5  1,15  1-7
+│ │ │ ┌ month       (1–12)     */3  2-4   JAN,JUN,DEC
 │ │ │ │ ┌ weekday   (0–7)      1-5  0,6   MON-FRI  (0/7 = Sunday)
 * * * * *
 ```
+
+When both day-of-month and weekday are restricted, the job fires when
+**either** matches (Vixie cron semantics).
+
+> Next-run times are computed in local time; daylight-saving transitions are
+> approximated (a run scheduled inside a DST jump may be off by the shifted
+> hour).
 
 ### @special shortcuts
 
@@ -125,3 +139,7 @@ cronv -f ~/my-jobs.cron      # Edit any file as a crontab
 | `@weekly` | `0 0 * * 0` | Sundays at midnight |
 | `@monthly` | `0 0 1 * *` | 1st of month at midnight |
 | `@yearly` / `@annually` | `0 0 1 1 *` | Jan 1 at midnight |
+
+## License
+
+[MIT](LICENSE)

@@ -8,8 +8,9 @@ use ratatui::{
 
 use crate::app::{
     App, AppMode, EditClickTarget, EditForm, FormField, StatusKind, TextInput, UiRect, VisibleRow,
+    visual_col,
 };
-use crate::cron::FIELD_HELP;
+use crate::cron::{FIELD_HELP, SPECIALS};
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -45,19 +46,6 @@ fn expand_tabs(s: &str) -> String {
         }
     }
     out
-}
-
-/// Return the visual column of `byte_pos` in `s`, expanding tabs at 8-wide stops.
-fn visual_col(s: &str, byte_pos: usize) -> usize {
-    let mut col = 0usize;
-    for c in s[..byte_pos].chars() {
-        if c == '\t' {
-            col = (col / 8 + 1) * 8;
-        } else {
-            col += 1;
-        }
-    }
-    col
 }
 
 // ── Root ──────────────────────────────────────────────────────────────────────
@@ -579,6 +567,14 @@ fn render_form_body(f: &mut Frame, app: &mut App, form: &EditForm, use_24h: bool
     let (special_toggle, standard_toggle) = render_type_toggle(f, form, rows[0]);
 
     let sched_area = rows[2];
+    let fcols = Layout::horizontal([
+        Constraint::Ratio(1, 5),
+        Constraint::Ratio(1, 5),
+        Constraint::Ratio(1, 5),
+        Constraint::Ratio(1, 5),
+        Constraint::Ratio(1, 5),
+    ])
+    .split(sched_area);
     let mut targets: Vec<(EditClickTarget, UiRect)> = Vec::new();
     targets.push((EditClickTarget::ToggleSpecial, special_toggle));
     targets.push((EditClickTarget::ToggleStandard, standard_toggle));
@@ -594,22 +590,15 @@ fn render_form_body(f: &mut Frame, app: &mut App, form: &EditForm, use_24h: bool
             EditClickTarget::Field(FormField::Special),
             to_ui_rect(sched_area),
         ));
+        let keywords: Vec<&str> = SPECIALS.iter().map(|e| e.keyword).collect();
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                "  @reboot @hourly @daily @weekly @monthly @yearly @annually @midnight",
+                format!("  {}", keywords.join(" ")),
                 Style::default().fg(C_MUTED),
             ))),
             rows[3],
         );
     } else {
-        let fcols = Layout::horizontal([
-            Constraint::Ratio(1, 5),
-            Constraint::Ratio(1, 5),
-            Constraint::Ratio(1, 5),
-            Constraint::Ratio(1, 5),
-            Constraint::Ratio(1, 5),
-        ])
-        .split(sched_area);
         render_field(
             f,
             "Minute",
@@ -707,7 +696,23 @@ fn render_form_body(f: &mut Frame, app: &mut App, form: &EditForm, use_24h: bool
         .alignment(Alignment::Center),
         rows[8],
     );
-    set_cursor(f, form, area, sched_area);
+
+    // Place the terminal cursor inside the focused field.
+    let focused_area = match form.focused {
+        FormField::Command => rows[6],
+        FormField::Special => sched_area,
+        FormField::Minute => fcols[0],
+        FormField::Hour => fcols[1],
+        FormField::Day => fcols[2],
+        FormField::Month => fcols[3],
+        FormField::Weekday => fcols[4],
+    };
+    let input = form.active_input();
+    let cx = focused_area.x + 1 + visual_col(&input.value, input.cursor) as u16;
+    let cy = focused_area.y + 1;
+    if cx < focused_area.x + focused_area.width.saturating_sub(1) {
+        f.set_cursor_position((cx, cy));
+    }
 }
 
 fn render_field_help(f: &mut Frame, form: &EditForm, area: Rect) {
@@ -790,50 +795,6 @@ fn render_field(f: &mut Frame, label: &str, input: &TextInput, focused: bool, ar
         ),
         area,
     );
-}
-
-fn set_cursor(f: &mut Frame, form: &EditForm, area: Rect, sched_area: Rect) {
-    let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(3),
-        Constraint::Length(2),
-        Constraint::Length(3),
-        Constraint::Length(1),
-        Constraint::Length(3),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .split(area);
-
-    let field_area = match form.focused {
-        FormField::Command => rows[6],
-        FormField::Special => sched_area,
-        _ => {
-            let fc = Layout::horizontal([
-                Constraint::Ratio(1, 5),
-                Constraint::Ratio(1, 5),
-                Constraint::Ratio(1, 5),
-                Constraint::Ratio(1, 5),
-                Constraint::Ratio(1, 5),
-            ])
-            .split(sched_area);
-            match form.focused {
-                FormField::Minute => fc[0],
-                FormField::Hour => fc[1],
-                FormField::Day => fc[2],
-                FormField::Month => fc[3],
-                FormField::Weekday => fc[4],
-                _ => return,
-            }
-        }
-    };
-    let input = form.active_input();
-    let cx = field_area.x + 1 + input.cursor as u16;
-    let cy = field_area.y + 1;
-    if cx < field_area.x + field_area.width.saturating_sub(1) {
-        f.set_cursor_position((cx, cy));
-    }
 }
 
 // ── Info panel (per-job) ──────────────────────────────────────────────────────

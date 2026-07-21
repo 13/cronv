@@ -213,6 +213,9 @@ impl EditForm {
     pub fn preview(&self, use_24h: bool) -> String {
         self.to_schedule().describe(use_24h)
     }
+    pub fn schedule_valid(&self) -> bool {
+        self.to_schedule().is_valid()
+    }
     fn to_schedule(&self) -> CronSchedule {
         if self.is_special {
             CronSchedule::Special(self.special.value.trim().into())
@@ -545,6 +548,14 @@ impl App {
         let Some(form) = self.form.take() else { return };
         if !form.is_valid() {
             self.set_status("Command cannot be empty.".into(), StatusKind::Error);
+            self.form = Some(form);
+            return;
+        }
+        if !form.schedule_valid() {
+            self.set_status(
+                "Invalid schedule — check the field values.".into(),
+                StatusKind::Error,
+            );
             self.form = Some(form);
             return;
         }
@@ -1026,15 +1037,37 @@ impl App {
     }
 }
 
+/// Visual column of byte index `pos` in `s`, expanding tabs at 8-wide stops.
+pub fn visual_col(s: &str, pos: usize) -> usize {
+    let mut col = 0usize;
+    for c in s[..pos].chars() {
+        if c == '\t' {
+            col = (col / 8 + 1) * 8;
+        } else {
+            col += 1;
+        }
+    }
+    col
+}
+
+/// Byte index of the character occupying visual column `col` (clamped to the
+/// end of the string). Inverse of `visual_col`; always a char boundary.
+fn byte_index_for_visual_col(s: &str, col: usize) -> usize {
+    let mut vc = 0usize;
+    for (i, c) in s.char_indices() {
+        let w = if c == '\t' { 8 - (vc % 8) } else { 1 };
+        if col < vc + w {
+            return i;
+        }
+        vc += w;
+    }
+    s.len()
+}
+
 fn set_input_cursor_from_click(input: &mut TextInput, field: UiRect, col: u16) {
     let left = field.x.saturating_add(1);
-    let right = field.x.saturating_add(field.width.saturating_sub(1));
-    let click = col.clamp(left, right);
-    let max = input.value.len();
-    input.cursor = (click.saturating_sub(left)) as usize;
-    if input.cursor > max {
-        input.cursor = max;
-    }
+    let rel = col.saturating_sub(left) as usize;
+    input.cursor = byte_index_for_visual_col(&input.value, rel);
 }
 
 // ── I/O ───────────────────────────────────────────────────────────────────────
@@ -1070,12 +1103,29 @@ fn load_content(source: &CrontabSource) -> Result<String> {
 fn save_content(source: &CrontabSource, content: &str) -> Result<()> {
     match source {
         CrontabSource::File(p) => {
-            std::fs::write(p, content).with_context(|| format!("Failed to write {}", p.display()))
+            // Write to a temp file in the same directory, then rename over the
+            // target so a crash can't leave a half-written crontab.
+            let dir = p
+                .parent()
+                .filter(|d| !d.as_os_str().is_empty())
+                .unwrap_or_else(|| std::path::Path::new("."));
+            let old_perms = std::fs::metadata(p).map(|m| m.permissions()).ok();
+            let mut tmp = tempfile::NamedTempFile::new_in(dir)
+                .with_context(|| format!("Failed to create temp file in {}", dir.display()))?;
+            tmp.write_all(content.as_bytes())
+                .with_context(|| format!("Failed to write {}", p.display()))?;
+            tmp.persist(p)
+                .with_context(|| format!("Failed to write {}", p.display()))?;
+            if let Some(perms) = old_perms {
+                let _ = std::fs::set_permissions(p, perms);
+            }
+            Ok(())
         }
         CrontabSource::System => {
             let mut child = Command::new("crontab")
                 .arg("-")
                 .stdin(Stdio::piped())
+                .stderr(Stdio::piped())
                 .spawn()
                 .context("Failed to launch crontab -")?;
             if let Some(mut stdin) = child.stdin.take() {
@@ -1083,9 +1133,20 @@ fn save_content(source: &CrontabSource, content: &str) -> Result<()> {
                     .write_all(content.as_bytes())
                     .context("Failed to write to crontab")?;
             }
-            let status = child.wait().context("crontab - did not finish")?;
-            if !status.success() {
-                return Err(anyhow::anyhow!("crontab - returned error"));
+            let out = child
+                .wait_with_output()
+                .context("crontab - did not finish")?;
+            if !out.status.success() {
+                let err = String::from_utf8_lossy(&out.stderr);
+                let err = err.trim();
+                return Err(anyhow::anyhow!(
+                    "crontab: {}",
+                    if err.is_empty() {
+                        "returned error"
+                    } else {
+                        err
+                    }
+                ));
             }
             Ok(())
         }

@@ -2,20 +2,18 @@ mod app;
 mod cron;
 mod ui;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use app::{App, CrontabSource, StatusKind};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, MouseButton, MouseEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseButton,
+        MouseEventKind,
+    },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{EnterAlternateScreen, enable_raw_mode},
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
-use std::{
-    io,
-    path::PathBuf,
-    process::Command,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use ratatui::DefaultTerminal;
+use std::{io, io::Write, path::PathBuf, process::Command};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const NAME: &str = env!("CARGO_PKG_NAME");
@@ -35,8 +33,8 @@ Options:
 
 Examples:
   {NAME}                        Edit the current user's system crontab
-  {NAME} --file /etc/crontab    Edit a specific crontab file
-  {NAME} -f ~/jobs.cron         Edit a custom cron file
+  {NAME} --file ~/jobs.cron     Edit a crontab file directly
+  {NAME} -f ~/jobs.cron         Same, short form
 "
     );
 }
@@ -96,29 +94,31 @@ fn main() {
 }
 
 fn run_tui(app: &mut App) -> Result<()> {
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut term = Terminal::new(backend)?;
+    // ratatui::try_init installs a panic hook that restores raw mode and the
+    // alternate screen; chain one that also disables mouse capture so a panic
+    // can't leave the terminal spewing mouse escape codes.
+    let mut term = ratatui::try_init()?;
+    execute!(io::stdout(), EnableMouseCapture)?;
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(io::stdout(), DisableMouseCapture);
+        prev_hook(info);
+    }));
 
     let result = event_loop(&mut term, app);
 
-    disable_raw_mode()?;
-    execute!(
-        term.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    term.show_cursor()?;
+    let _ = execute!(io::stdout(), DisableMouseCapture);
+    ratatui::restore();
     result
 }
 
-fn event_loop(term: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> Result<()> {
+fn event_loop(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
     loop {
         term.draw(|f| ui::render(f, app))?;
         match event::read()? {
-            Event::Key(key) if app.handle_key(key)? => {
+            // Ignore release/repeat events (Windows and kitty-protocol
+            // terminals report them; acting on both fires keys twice).
+            Event::Key(key) if key.kind == KeyEventKind::Press && app.handle_key(key)? => {
                 break;
             }
             Event::Mouse(mouse) => {
@@ -154,26 +154,26 @@ fn event_loop(term: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) 
 }
 
 fn launch_external_raw_editor(
-    term: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    term: &mut DefaultTerminal,
     app: &mut App,
     content: &str,
 ) -> Result<()> {
-    let tmp = std::env::temp_dir().join(format!(
-        "cronv-{}-{}.cron",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    std::fs::write(&tmp, content)?;
+    // Crontabs can hold secrets — tempfile gives a 0600, race-free file that
+    // is removed on drop.
+    let mut tmp = tempfile::Builder::new()
+        .prefix("cronv-")
+        .suffix(".cron")
+        .tempfile()
+        .context("Failed to create temp file")?;
+    tmp.write_all(content.as_bytes())?;
+    tmp.flush()?;
 
-    suspend_tui(term)?;
-    let edit_result = run_editor_on_file(&tmp);
+    suspend_tui()?;
+    let edit_result = run_editor_on_file(tmp.path());
     resume_tui(term)?;
 
     match edit_result {
-        Ok(()) => match std::fs::read_to_string(&tmp) {
+        Ok(()) => match std::fs::read_to_string(tmp.path()) {
             Ok(edited) => app.apply_raw_content(&edited),
             Err(e) => app.notify_status(
                 format!("Failed to read edited content: {}", e),
@@ -183,24 +183,18 @@ fn launch_external_raw_editor(
         Err(e) => app.notify_status(format!("Raw editor failed: {}", e), StatusKind::Error),
     }
 
-    let _ = std::fs::remove_file(&tmp);
     Ok(())
 }
 
-fn suspend_tui(term: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
-    disable_raw_mode()?;
-    execute!(
-        term.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    term.show_cursor()?;
+fn suspend_tui() -> Result<()> {
+    execute!(io::stdout(), DisableMouseCapture)?;
+    ratatui::restore();
     Ok(())
 }
 
-fn resume_tui(term: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+fn resume_tui(term: &mut DefaultTerminal) -> Result<()> {
     enable_raw_mode()?;
-    execute!(term.backend_mut(), EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
     term.clear()?;
     Ok(())
 }
@@ -226,93 +220,4 @@ fn run_editor_on_file(path: &std::path::Path) -> Result<()> {
 
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::cron::CronSchedule;
-    use chrono::NaiveDateTime;
-
-    fn next_after(sched: &CronSchedule, from_str: &str) -> String {
-        let from = NaiveDateTime::parse_from_str(from_str, "%Y-%m-%d %H:%M").unwrap();
-        match sched {
-            CronSchedule::Standard {
-                minute,
-                hour,
-                day,
-                month,
-                weekday,
-            } => crate::cron::next_standard(minute, hour, day, month, weekday, from)
-                .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
-                .unwrap_or_else(|| "None".into()),
-            _ => "special".into(),
-        }
-    }
-
-    fn sched(s: &str) -> CronSchedule {
-        let mut p = s.split_whitespace();
-        CronSchedule::Standard {
-            minute: p.next().unwrap().into(),
-            hour: p.next().unwrap().into(),
-            day: p.next().unwrap().into(),
-            month: p.next().unwrap().into(),
-            weekday: p.next().unwrap().into(),
-        }
-    }
-
-    #[test]
-    fn next_runs() {
-        assert_eq!(
-            next_after(&sched("*/15 * * * *"), "2025-04-22 09:08"),
-            "2025-04-22 09:15"
-        );
-        assert_eq!(
-            next_after(&sched("*/15 * * * *"), "2025-04-22 09:15"),
-            "2025-04-22 09:30"
-        );
-        assert_eq!(
-            next_after(&sched("0 * * * *"), "2025-04-22 09:00"),
-            "2025-04-22 10:00"
-        );
-        assert_eq!(
-            next_after(&sched("0 2 * * *"), "2025-04-22 09:00"),
-            "2025-04-23 02:00"
-        );
-        assert_eq!(
-            next_after(&sched("30 2 * * 5"), "2025-04-22 09:00"),
-            "2025-04-25 02:30"
-        );
-        assert_eq!(
-            next_after(&sched("30 3 1 * *"), "2025-04-22 09:00"),
-            "2025-05-01 03:30"
-        );
-        assert_eq!(
-            next_after(&sched("0 4,5 * * *"), "2025-04-22 03:30"),
-            "2025-04-22 04:00"
-        );
-        assert_eq!(
-            next_after(&sched("0 4,5 * * *"), "2025-04-22 04:30"),
-            "2025-04-22 05:00"
-        );
-        assert_eq!(
-            next_after(&sched("0 4,5 * * *"), "2025-04-22 05:30"),
-            "2025-04-23 04:00"
-        );
-        assert_eq!(
-            next_after(&sched("0 4 * * 0,3"), "2025-04-22 09:00"),
-            "2025-04-23 04:00"
-        );
-        assert_eq!(
-            next_after(&sched("*/5 9,12 1 2-4 *"), "2025-01-31 00:00"),
-            "2025-02-01 09:00"
-        );
-        assert_eq!(
-            next_after(&sched("*/5 9,12 1 2-4 *"), "2025-02-01 09:03"),
-            "2025-02-01 09:05"
-        );
-        assert_eq!(
-            next_after(&sched("*/5 9,12 1 2-4 *"), "2025-02-01 09:55"),
-            "2025-02-01 12:00"
-        );
-    }
 }
