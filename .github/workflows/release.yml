@@ -26,9 +26,6 @@ jobs:
           - target: x86_64-unknown-linux-musl
             archive: cronv-linux-x86_64-musl.tar.gz
             musl: true
-          - target: aarch64-unknown-linux-musl
-            archive: cronv-linux-aarch64-musl.tar.gz
-            cross: true
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust stable
@@ -38,6 +35,53 @@ jobs:
       - name: Install musl tools
         if: matrix.musl
         run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          BIN=target/${{ matrix.target }}/release/${{ env.BINARY }}
+          tar -czf ${{ matrix.archive }} -C "$(dirname $BIN)" "$(basename $BIN)"
+          sha256sum ${{ matrix.archive }} > ${{ matrix.archive }}.sha256
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: |
+            ${{ matrix.archive }}
+            ${{ matrix.archive }}.sha256
+
+  build-extra:
+    name: Build ${{ matrix.target }}
+    # aarch64 and macOS are built on GitHub only. On Gitea the expression maps
+    # runs-on to the host runner so the job is picked up and skipped by `if`
+    # instead of waiting forever for a runner that does not exist.
+    if: github.server_url == 'https://github.com'
+    runs-on: ${{ github.server_url == 'https://github.com' && matrix.runner || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-latest
+            archive: cronv-linux-aarch64-musl.tar.gz
+            cross: true
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            archive: cronv-macos-x86_64.tar.gz
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            archive: cronv-macos-aarch64.tar.gz
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - name: Install cross
         if: matrix.cross
         uses: taiki-e/install-action@v2
@@ -63,50 +107,11 @@ jobs:
             ${{ matrix.archive }}
             ${{ matrix.archive }}.sha256
 
-  build-macos:
-    name: Build ${{ matrix.target }}
-    # No macOS runners on the local Gitea; only GitHub builds these.
-    if: github.server_url == 'https://github.com'
-    runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-apple-darwin
-            archive: cronv-macos-x86_64.tar.gz
-          - target: aarch64-apple-darwin
-            archive: cronv-macos-aarch64.tar.gz
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - name: Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-      - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }}
-      - name: Package
-        shell: bash
-        run: |
-          BIN=target/${{ matrix.target }}/release/${{ env.BINARY }}
-          tar -czf ${{ matrix.archive }} -C "$(dirname $BIN)" "$(basename $BIN)"
-          sha256sum ${{ matrix.archive }} > ${{ matrix.archive }}.sha256
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.archive }}
-          path: |
-            ${{ matrix.archive }}
-            ${{ matrix.archive }}.sha256
-
   release:
     name: Create GitHub Release
-    needs: [build-linux, build-macos]
-    # run when linux succeeded and macos either succeeded or was skipped (Gitea)
-    if: always() && needs.build-linux.result == 'success' && (needs.build-macos.result == 'success' || needs.build-macos.result == 'skipped') && startsWith(github.ref, 'refs/tags/')
+    needs: [build-linux, build-extra]
+    # run when linux succeeded and extra either succeeded or was skipped (Gitea)
+    if: always() && needs.build-linux.result == 'success' && (needs.build-extra.result == 'success' || needs.build-extra.result == 'skipped') && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
