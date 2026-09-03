@@ -40,7 +40,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: Install cross
         if: matrix.cross
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.85.6
         with:
           tool: cross
       - name: Cache
