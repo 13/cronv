@@ -100,7 +100,7 @@ jobs:
           tar -czf ${{ matrix.archive }} -C "$(dirname $BIN)" "$(basename $BIN)"
           sha256sum ${{ matrix.archive }} > ${{ matrix.archive }}.sha256
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.archive }}
           path: |
