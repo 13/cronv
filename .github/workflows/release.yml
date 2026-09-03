@@ -125,11 +125,17 @@ jobs:
         run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
       - name: Create release
         uses: softprops/action-gh-release@v2
+        env:
+          # Gitea 405s on the GitHub-only generate-notes endpoint, and
+          # Node's fetch ignores NODE_EXTRA_CA_CERTS for the asset upload
+          # against Gitea's self-signed-CA cert; disable verification only
+          # off github.com.
+          NODE_TLS_REJECT_UNAUTHORIZED: ${{ github.server_url != 'https://github.com' && '0' || '1' }}
         with:
           name: cronv v${{ steps.tag.outputs.version }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
+          generate_release_notes: ${{ github.server_url == 'https://github.com' }}
           files: |
             dist/*.tar.gz
             dist/*.sha256
