@@ -12,7 +12,11 @@ env:
 jobs:
   test:
     name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    # The self-hosted Gitea runner has no macOS label. Gitea only evaluates a
+    # job-level `if` once a runner has claimed the job, so runs-on must resolve
+    # to a label it owns; the `if` then skips the macOS entry there.
+    runs-on: ${{ github.server_url == 'https://github.com' && matrix.os || 'ubuntu-latest' }}
+    if: ${{ github.server_url == 'https://github.com' || matrix.os == 'ubuntu-latest' }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -72,6 +76,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # GitHub's hosted image ships a Rust toolchain; a self-hosted runner need
+      # not, and `cargo audit` is useless without cargo on PATH.
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-audit
         uses: taiki-e/install-action@v2
